@@ -4,28 +4,28 @@ const port = 3000;
 
 // Klassen-Zuordnung zu den Zweigen
 const klassen = {
-  elektronik: ['5AHEL', '5BHEL', '5CHEL'],
-  elektrotechnik: ['5AHET', '5BHET', '5CHET'],
-  maschinenbau: ['5AHMBS', '5BHMBZ', '5VHMBS'],
-  wirtschaft: ['5AHWIE', '5BHWIE', '5DHWIE']
+    elektronik: ['5AHEL', '5BHEL', '5CHEL'],
+    elektrotechnik: ['5AHET', '5BHET', '5CHET'],
+    maschinenbau: ['5AHMBS', '5BHMBZ', '5VHMBS'],
+    wirtschaft: ['5AHWIE', '5BHWIE', '5DHWIE']
 };
 
 const zweigFarben = {
-  elektronik: '#2d5016',
-  elektrotechnik: '#e60505',
-  maschinenbau: '#4f56d0',
-  wirtschaft: '#ffeb3b'
+    elektronik: '#2d5016',
+    elektrotechnik: '#e60505',
+    maschinenbau: '#4f56d0',
+    wirtschaft: '#ffeb3b'
 };
 
 const zweigNamen = {
-  elektronik: 'Elektronik',
-  elektrotechnik: 'Elektrotechnik',
-  maschinenbau: 'Maschinenbau',
-  wirtschaft: 'Wirtschaft'
+    elektronik: 'Elektronik',
+    elektrotechnik: 'Elektrotechnik',
+    maschinenbau: 'Maschinenbau',
+    wirtschaft: 'Wirtschaft'
 };
 
 app.get('/', (req, res) => {
-  res.send(`
+    res.send(`
     <!DOCTYPE html>
     <html lang="de">
     <head>
@@ -119,18 +119,18 @@ app.get('/', (req, res) => {
 });
 
 app.get('/zweig/:zweig', (req, res) => {
-  const zweig = req.params.zweig.toLowerCase();
-  
-  if (!klassen[zweig]) {
-    return res.redirect('/');
-  }
+    const zweig = req.params.zweig.toLowerCase();
 
-  const klassenListe = klassen[zweig];
-  const farbe = zweigFarben[zweig];
-  const name = zweigNamen[zweig];
-  const textFarbe = (zweig === 'elektrotechnik' || zweig === 'wirtschaft') ? '#333' : 'white';
+    if (!klassen[zweig]) {
+        return res.redirect('/');
+    }
 
-  res.send(`
+    const klassenListe = klassen[zweig];
+    const farbe = zweigFarben[zweig];
+    const name = zweigNamen[zweig];
+    const textFarbe = (zweig === 'elektrotechnik' || zweig === 'wirtschaft') ? '#333' : 'white';
+
+    res.send(`
     <!DOCTYPE html>
     <html lang="de">
     <head>
@@ -217,9 +217,9 @@ app.get('/zweig/:zweig', (req, res) => {
         <h1>Klassen</h1>
         <h2>${name}</h2>
         <div class="klassen-grid">
-          ${klassenListe.map(klasse => 
-            `<a href="/klasse/${klasse}" class="klassen-button">${klasse}</a>`
-          ).join('')}
+          ${klassenListe.map(klasse =>
+        `<a href="/klasse/${klasse}" class="klassen-button">${klasse}</a>`
+    ).join('')}
         </div>
       </div>
     </body>
@@ -228,25 +228,25 @@ app.get('/zweig/:zweig', (req, res) => {
 });
 
 app.get('/klasse/:klasse', (req, res) => {
-  const klasse = req.params.klasse.toUpperCase();
-  
-  // Finde den Zweig dieser Klasse
-  let zweig = '';
-  for (const [key, value] of Object.entries(klassen)) {
-    if (value.includes(klasse)) {
-      zweig = key;
-      break;
+    const klasse = req.params.klasse.toUpperCase();
+
+    // Finde den Zweig dieser Klasse
+    let zweig = '';
+    for (const [key, value] of Object.entries(klassen)) {
+        if (value.includes(klasse)) {
+            zweig = key;
+            break;
+        }
     }
-  }
 
-  if (!zweig) {
-    return res.redirect('/');
-  }
+    if (!zweig) {
+        return res.redirect('/');
+    }
 
-  const farbe = zweigFarben[zweig];
-  const textFarbe = (zweig === 'elektrotechnik' || zweig === 'wirtschaft') ? '#333' : 'white';
+    const farbe = zweigFarben[zweig];
+    const textFarbe = (zweig === 'elektrotechnik' || zweig === 'wirtschaft') ? '#333' : 'white';
 
-  res.send(`
+    res.send(`
     <!DOCTYPE html>
     <html lang="de">
     <head>
@@ -326,5 +326,5 @@ app.get('/klasse/:klasse', (req, res) => {
 });
 
 app.listen(port, () => {
-  console.log(`Server läuft auf http://localhost:${port}`);
+    console.log(`Server läuft auf http://localhost:${port}`);
 });
