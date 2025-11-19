@@ -40,7 +40,8 @@ app.get('/', (req, res) => {
         }
         body {
           font-family: Arial, sans-serif;
-          background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+          background: linear-gradient(135deg, #07175e 0%, #07175e
+           100%);
           min-height: 100vh;
           display: flex;
           justify-content: center;
@@ -145,7 +146,7 @@ app.get('/zweig/:zweig', (req, res) => {
         }
         body {
           font-family: Arial, sans-serif;
-          background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+          background: linear-gradient(135deg, #07175e 0%, #07175e 100%);
           min-height: 100vh;
           padding: 40px 20px;
         }
@@ -261,7 +262,7 @@ app.get('/klasse/:klasse', (req, res) => {
         }
         body {
           font-family: Arial, sans-serif;
-          background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+          background: linear-gradient(135deg, #07175e 0%, #07175e 100%);
           min-height: 100vh;
           display: flex;
           justify-content: center;
