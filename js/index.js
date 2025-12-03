@@ -1,6 +1,3 @@
-import express from 'express';
-import session from 'express-session';
-import axios from 'axios';
 import fs from 'fs';
 import https from 'https';
 import 'dotenv/config'; // liest die .env ein
