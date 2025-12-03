@@ -1,6 +1,6 @@
 import fs from 'fs';
 import https from 'https';
-import 'dotenv/config'; // liest die .env ein
+
 
 
 const express = require('express');
