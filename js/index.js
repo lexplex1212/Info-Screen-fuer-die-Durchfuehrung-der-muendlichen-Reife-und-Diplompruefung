@@ -7,7 +7,7 @@ const port = 3000;
 const axios = require('axios');
 const https = require('https');
 const fs = require('fs');
-require('.env').config();
+require('dotenv').config();
 
 
 //const express = require('express');
