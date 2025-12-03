@@ -3,7 +3,7 @@ const app = express();
 const port = 3000;
 
 // Zusätzliche Imports:
-const session = require('express-session');
+//const session = require('express-session');
 const axios = require('axios');
 const https = require('https');
 const fs = require('fs');
