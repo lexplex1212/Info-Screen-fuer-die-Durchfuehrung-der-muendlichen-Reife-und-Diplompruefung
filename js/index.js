@@ -3,14 +3,14 @@ const app = express();
 const port = 3000;
 
 
-const session = require('express');
+//const session = require('express');
 const axios = require('axios');
 const https = require('https');
 const fs = require('fs');
-require('dotenv').config();
+require('.env').config();
 
 
-//const express = require('express');
+const express = require('express');
 //const app = express();
 //const port = 3000;
 
