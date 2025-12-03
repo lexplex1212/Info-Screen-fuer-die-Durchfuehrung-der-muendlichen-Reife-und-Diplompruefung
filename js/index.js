@@ -1,6 +1,16 @@
+import express from 'express';
+import session from 'express-session';
+import axios from 'axios';
+import fs from 'fs';
+import https from 'https';
+import 'dotenv/config'; // liest die .env ein
+
+
 const express = require('express');
 const app = express();
 const port = 3000;
+
+let isLoggedIn = false;
 
 // Klassen-Zuordnung zu den Zweigen
 const klassen = {
@@ -24,7 +34,141 @@ const zweigNamen = {
     wirtschaft: 'Wirtschaft'
 };
 
+
 app.get('/', (req, res) => {
+    res.send(`
+    <!DOCTYPE html>
+    <html lang="de">
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>HTL - Login</title>
+      <style>
+        * {
+          margin: 0;
+          padding: 0;
+          box-sizing: border-box;
+        }
+        body {
+          font-family: Arial, sans-serif;
+          background: linear-gradient(135deg, #07175e 0%, #07175e 100%);
+          min-height: 100vh;
+          display: flex;
+          justify-content: center;
+          align-items: center;
+          padding: 20px;
+        }
+        .container {
+          background: white;
+          border-radius: 20px;
+          padding: 60px;
+          box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+          max-width: 500px;
+          width: 100%;
+          text-align: center;
+        }
+        h1 {
+          color: #333;
+          margin-bottom: 20px;
+          font-size: 2.5em;
+        }
+        p {
+          color: #666;
+          margin-bottom: 40px;
+          font-size: 1.2em;
+        }
+        .login-button {
+          display: inline-block;
+          padding: 15px 40px;
+          background-color: #0078d4;
+          color: white;
+          text-decoration: none;
+          border-radius: 8px;
+          font-size: 1.2em;
+          font-weight: bold;
+          transition: all 0.3s ease;
+          box-shadow: 0 5px 15px rgba(0,0,0,0.2);
+        }
+        .login-button:hover {
+          background-color: #005a9e;
+          transform: translateY(-2px);
+          box-shadow: 0 8px 20px rgba(0,0,0,0.3);
+        }
+      </style>
+    </head>
+    <body>
+      <div class="container">
+        <h1>Willkommen</h1>
+        <p>Bitte loggen Sie sich ein</p>
+        <a href="/microsoft-login" class="login-button">Mit Microsoft einloggen</a>
+      </div>
+    </body>
+    </html>
+  `);
+});
+
+app.get('/microsoft-login', (req, res) => {
+    res.send(`
+    <!DOCTYPE html>
+    <html lang="de">
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>Microsoft Login</title>
+      <style>
+        * {
+          margin: 0;
+          padding: 0;
+          box-sizing: border-box;
+        }
+        body {
+          font-family: Arial, sans-serif;
+          background: white;
+          min-height: 100vh;
+          display: flex;
+          justify-content: center;
+          align-items: center;
+          padding: 20px;
+        }
+        .login-container {
+          text-align: center;
+          max-width: 600px;
+        }
+        h1 {
+          color: black;
+          font-size: 2em;
+          margin-bottom: 40px;
+        }
+        .continue-button {
+          display: inline-block;
+          padding: 15px 40px;
+          background-color: #0078d4;
+          color: white;
+          text-decoration: none;
+          border-radius: 8px;
+          font-size: 1.1em;
+          font-weight: bold;
+          transition: all 0.3s ease;
+          border: none;
+          cursor: pointer;
+        }
+        .continue-button:hover {
+          background-color: #005a9e;
+        }
+      </style>
+    </head>
+    <body>
+      <div class="login-container">
+        <h1>Hier müssen Sie sich dann einloggen.</h1>
+        <a href="/home" class="continue-button">Weiter zur Hauptseite</a>
+      </div>
+    </body>
+    </html>
+  `);
+});
+
+
+app.get('/home', (req, res) => {
     res.send(`
     <!DOCTYPE html>
     <html lang="de">
@@ -106,7 +250,7 @@ app.get('/', (req, res) => {
     </head>
     <body>
       <div class="container">
-        <h1>Wähle deinen Zweig</h1>
+        <h1>Wähle Sie ihr Zweig aus</h1>
         <div class="button-grid">
           <a href="/zweig/elektronik" class="zweig-button elektronik">Elektronik</a>
           <a href="/zweig/elektrotechnik" class="zweig-button elektrotechnik">Elektrotechnik</a>
@@ -123,7 +267,7 @@ app.get('/zweig/:zweig', (req, res) => {
     const zweig = req.params.zweig.toLowerCase();
 
     if (!klassen[zweig]) {
-        return res.redirect('/');
+        return res.redirect('/home');
     }
 
     const klassenListe = klassen[zweig];
@@ -214,7 +358,7 @@ app.get('/zweig/:zweig', (req, res) => {
     </head>
     <body>
       <div class="container">
-        <a href="/" class="back-button">← Zurück zur Zweigauswahl</a>
+        <a href="/home" class="back-button">← Zurück zur Zweigauswahl</a>
         <h1>Klassen</h1>
         <h2>${name}</h2>
         <div class="klassen-grid">
@@ -241,7 +385,7 @@ app.get('/klasse/:klasse', (req, res) => {
     }
 
     if (!zweig) {
-        return res.redirect('/');
+        return res.redirect('/home');
     }
 
     const farbe = zweigFarben[zweig];
@@ -326,6 +470,11 @@ app.get('/klasse/:klasse', (req, res) => {
   `);
 });
 
-app.listen(port, () => {
-    console.log(`Server läuft auf http://localhost:${port}`);
+const httpsOptions = {
+    key: fs.readFileSync('./cert/key.pem'),
+    cert: fs.readFileSync('./cert/cert.pem'),
+};
+
+https.createServer(httpsOptions, app).listen(process.env.PORT, () => {
+    console.log('HTTPS-Server läuft auf Port ' + process.env.PORT);
 });
