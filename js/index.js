@@ -2,15 +2,15 @@ const express = require('express');
 const app = express();
 const port = 3000;
 
-
-//const session = require('express');
+// Zusätzliche Imports:
+const session = require('express-session');
 const axios = require('axios');
 const https = require('https');
 const fs = require('fs');
 require('.env').config();
 
 
-const express = require('express');
+//const express = require('express');
 //const app = express();
 //const port = 3000;
 
