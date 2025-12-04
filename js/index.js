@@ -112,66 +112,18 @@ app.get('/', (req, res) => {
 });
 
 app.get('/microsoft-login', (req, res) => {
-    res.send(`
-    <!DOCTYPE html>
-    <html lang="de">
-    <head>
-      <meta charset="UTF-8">
-      <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>Microsoft Login</title>
-      <style>
-        * {
-          margin: 0;
-          padding: 0;
-          box-sizing: border-box;
-        }
-        body {
-          font-family: Arial, sans-serif;
-          background: white;
-          min-height: 100vh;
-          display: flex;
-          justify-content: center;
-          align-items: center;
-          padding: 20px;
-        }
-        .login-container {
-          text-align: center;
-          max-width: 600px;
-        }
-        h1 {
-          color: black;
-          font-size: 2em;
-          margin-bottom: 40px;
-        }
-        .continue-button {
-          display: inline-block;
-          padding: 15px 40px;
-          background-color: #0078d4;
-          color: white;
-          text-decoration: none;
-          border-radius: 8px;
-          font-size: 1.1em;
-          font-weight: bold;
-          transition: all 0.3s ease;
-          border: none;
-          cursor: pointer;
-        }
-        .continue-button:hover {
-          background-color: #005a9e;
-        }
-      </style>
-    </head>
-    <body>
-      <div class="login-container">
-        <h1>Hier müssen Sie sich dann einloggen.</h1>
-        <a href="/home" class="continue-button">Weiter zur Hauptseite</a>
-      </div>
-    </body>
-    </html>
-  `);
+
+const authUrl =
+    `https://login.microsoftonline.com/${process.env.TENANT_ID}/oauth2/v2.0/authorize` +
+    `?client_id=${process.env.CLIENT_ID}` +
+    `&response_type=code` +
+    `&redirect_uri=${encodeURIComponent(process.env.REDIRECT_URI)}` +
+    `&response_mode=query` +
+    `&scope=openid%20email%20profile`;
+
+
+res.redirect(authUrl);
 });
-
-
 app.get('/home', (req, res) => {
     res.send(`
     <!DOCTYPE html>
