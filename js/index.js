@@ -113,13 +113,14 @@ app.get('/', (req, res) => {
 
 app.get('/microsoft-login', (req, res) => {
 
-const authUrl =
-    `https://login.microsoftonline.com/${process.env.TENANT_ID}/oauth2/v2.0/authorize` +
-    `?client_id=${process.env.CLIENT_ID}` +
-    `&response_type=code` +
-    `&redirect_uri=${encodeURIComponent(process.env.REDIRECT_URI)}` +
-    `&response_mode=query` +
-    `&scope=openid%20email%20profile`;
+    const authUrl =
+        `https://login.microsoftonline.com/organizations/oauth2/v2.0/authorize` +
+        `?client_id=${process.env.CLIENT_ID}` +
+        `&response_type=code` +
+        `&redirect_uri=${encodeURIComponent(process.env.REDIRECT_URI)}` +
+        `&response_mode=query` +
+        `&scope=openid%20email%20profile`;
+
 
 
 res.redirect(authUrl);
