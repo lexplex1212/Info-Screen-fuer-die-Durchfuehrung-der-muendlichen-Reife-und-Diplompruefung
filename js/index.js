@@ -3,7 +3,7 @@ const app = express();
 const port = 3000;
 
 // Zusätzliche Imports:
-//const session = require('express-session');
+const session = require('express-session');
 const axios = require('axios');
 const https = require('https');
 const fs = require('fs');
@@ -15,8 +15,38 @@ const sqlite3 = require('sqlite3').verbose();
 //const app = express();
 //const port = 3000;
 
-
 let isLoggedIn = false;
+
+// Session (Login-Status wird am Server gespeichert)
+app.use(session({
+    secret: process.env.SESSION_SECRET || 'BITTE_IN_.env_SESSION_SECRET_SETZEN',
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+        secure: true,     // weil wir über HTTPS laufen
+        sameSite: 'lax'
+    }
+}));
+
+// SQLite DB (Whitelist) – Datei muss im gleichen Ordner liegen wie index.js
+const db = new sqlite3.Database('./termine.db', sqlite3.OPEN_READONLY, (err) => {
+    if (err) {
+        console.error('DB Fehler:', err.message);
+    } else {
+        console.log('DB verbunden: termine.db');
+    }
+});
+
+function requireAuth(req, res, next) {
+    if (req.session && req.session.user) return next();
+    return res.redirect('/');
+}
+
+function base64UrlDecode(str) {
+    str = str.replace(/-/g, '+').replace(/_/g, '/');
+    while (str.length % 4) str += '=';
+    return Buffer.from(str, 'base64').toString('utf8');
+}
 
 // Klassen-Zuordnung zu den Zweigen
 const klassen = {
@@ -42,6 +72,10 @@ const zweigNamen = {
 
 
 app.get('/', (req, res) => {
+    // Wenn schon eingeloggt, direkt zur Startseite
+    if (req.session && req.session.user) {
+        return res.redirect('/home');
+    }
     res.send(`
     <!DOCTYPE html>
     <html lang="de">
@@ -125,9 +159,109 @@ app.get('/microsoft-login', (req, res) => {
 
 
 
-res.redirect(authUrl);
+    res.redirect(authUrl);
 });
-app.get('/home', (req, res) => {
+
+// Microsoft OAuth Callback
+// WICHTIG: process.env.REDIRECT_URI muss auf diese Route zeigen:
+// z.B. https://172.16.61.2:3000/auth/callback
+app.get('/auth/callback', async (req, res) => {
+    const code = req.query.code;
+
+    if (!code) {
+        return res.status(400).send(`
+            <h1>Login abgebrochen</h1>
+            <p>Kein "code" Parameter erhalten. Bitte erneut einloggen.</p>
+            <a href="/">Zurück</a>
+        `);
+    }
+
+    try {
+        // 1) Authorization Code -> Tokens tauschen
+        const tokenResponse = await axios.post(
+            'https://login.microsoftonline.com/organizations/oauth2/v2.0/token',
+            new URLSearchParams({
+                client_id: process.env.CLIENT_ID,
+                client_secret: process.env.CLIENT_SECRET,
+                grant_type: 'authorization_code',
+                code: code,
+                redirect_uri: process.env.REDIRECT_URI
+            }),
+            { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
+        );
+
+        const idToken = tokenResponse.data.id_token;
+        if (!idToken) {
+            return res.status(500).send('Kein id_token erhalten. Prüfe Azure App-Setup.');
+        }
+
+        // 2) ID Token decodieren (wir lesen nur den Payload)
+        const payload = JSON.parse(base64UrlDecode(idToken.split('.')[1]));
+        const email = (payload.preferred_username || payload.upn || payload.email || '').toLowerCase();
+
+        if (!email) {
+            return res.status(403).send('Keine E-Mail im Token gefunden.');
+        }
+
+        // 3) Domain Check
+        if (!email.endsWith('@ms.bulme.at')) {
+            return res.status(403).send(`
+                <h1>Zugriff verweigert</h1>
+                <p>Nur <b>@ms.bulme.at</b> Accounts sind erlaubt.</p>
+                <p>Du: ${email}</p>
+                <a href="/">Zurück</a>
+            `);
+        }
+
+        // 4) Kürzel aus der E-Mail (Teil vor @)
+        const kuerzel = email.split('@')[0].toUpperCase();
+
+        // 5) Whitelist Check gegen SQLite
+        db.get(
+            'SELECT 1 AS ok FROM pruefer_login WHERE kuerzel = ? COLLATE NOCASE LIMIT 1',
+            [kuerzel],
+            (err, row) => {
+                if (err) {
+                    console.error('DB Fehler:', err);
+                    return res.status(500).send('Datenbankfehler');
+                }
+
+                if (!row) {
+                    return res.status(403).send(`
+                        <h1>Zugriff verweigert</h1>
+                        <p>Dein Kürzel <b>${kuerzel}</b> ist nicht freigeschaltet.</p>
+                        <a href="/">Zurück</a>
+                    `);
+                }
+
+                // 6) Login merken (Session)
+                req.session.user = {
+                    email,
+                    kuerzel,
+                    name: payload.name || ''
+                };
+
+                return res.redirect('/home');
+            }
+        );
+    } catch (err) {
+        console.error(err.response?.data || err.message);
+        return res.status(500).send(`
+            <h1>Fehler beim Login</h1>
+            <p>Prüfe CLIENT_SECRET und ob REDIRECT_URI exakt mit Azure übereinstimmt.</p>
+            <a href="/">Zurück</a>
+        `);
+    }
+});
+
+// Logout (optional)
+app.get('/logout', (req, res) => {
+    req.session.destroy(() => {
+        res.redirect('/');
+    });
+});
+
+app.get('/home', requireAuth, (req, res) => {
     res.send(`
     <!DOCTYPE html>
     <html lang="de">
@@ -222,7 +356,7 @@ app.get('/home', (req, res) => {
   `);
 });
 
-app.get('/zweig/:zweig', (req, res) => {
+app.get('/zweig/:zweig', requireAuth, (req, res) => {
     const zweig = req.params.zweig.toLowerCase();
 
     if (!klassen[zweig]) {
@@ -331,7 +465,7 @@ app.get('/zweig/:zweig', (req, res) => {
   `);
 });
 
-app.get('/klasse/:klasse', (req, res) => {
+app.get('/klasse/:klasse', requireAuth, (req, res) => {
     const klasse = req.params.klasse.toUpperCase();
 
     // Finde den Zweig dieser Klasse
