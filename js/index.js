@@ -7,7 +7,7 @@ const session = require('express-session'); //  NEU
 const axios = require('axios');
 const https = require('https');
 const fs = require('fs');
-require('dotenv').config();
+require('dotenv').config({override: true});
 
 // (sqlite3 brauchst du für den Domain-Check nicht – kann bleiben oder weg)
 // const sqlite3 = require('sqlite3').verbose();
