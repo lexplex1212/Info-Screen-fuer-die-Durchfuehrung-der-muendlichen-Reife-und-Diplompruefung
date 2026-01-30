@@ -15,6 +15,7 @@ const sqlite3 = require('sqlite3').verbose();
 //const app = express();
 //const port = 3000;
 
+
 let isLoggedIn = false;
 
 // Klassen-Zuordnung zu den Zweigen
