@@ -1,6 +1,4 @@
-@ -113,325 +113,326 @@
-
-    app.get('/microsoft-login', (req, res) => {
+ app.get('/microsoft-login', (req, res) => {
 
         const authUrl =
             `https://login.microsoftonline.com/${process.env.TENANT_ID}/oauth2/v2.0/authorize` +
