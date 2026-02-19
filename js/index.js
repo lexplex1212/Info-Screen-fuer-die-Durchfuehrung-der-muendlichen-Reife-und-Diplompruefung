@@ -15,7 +15,7 @@ const sqlite3 = require('sqlite3').verbose();
 let isLoggedIn = false;
 
 // NEU - Datenbankverbindung erstellen
-const dbPath = '/Documents/AlexFineas/Server-Git/Info-Screen-fuer-die-Durchfuehrung-der-muendlichen-Reife-und-Diplompruefung/termine.db';
+const dbPath = '/Documents/AlexFineas/Server-Git/Info-Screen-fuer-die-Durchfuehrung-der-muendlichen-Reife-und-Diplompruefung/termineordner';
 const db = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY, (err) => {
     if (err) {
         console.error('❌ Fehler beim Öffnen der Datenbank:', err.message);
