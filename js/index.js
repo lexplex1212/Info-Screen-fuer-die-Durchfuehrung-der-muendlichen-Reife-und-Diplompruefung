@@ -3,18 +3,29 @@ const app = express();
 const port = 3000;
 
 // Zusätzliche Imports:
-const session = require('express-session'); //  NEU
+const session = require('express-session');
 const axios = require('axios');
 const https = require('https');
 const fs = require('fs');
 require('dotenv').config({override: true});
 
-// (sqlite3 brauchst du für den Domain-Check nicht – kann bleiben oder weg)
-// const sqlite3 = require('sqlite3').verbose();
+// NEU - SQLite3 Import
+const sqlite3 = require('sqlite3').verbose();
 
 let isLoggedIn = false;
 
-//  Session speichern (damit Login "merkt", dass man drin ist)
+// NEU - Datenbankverbindung erstellen
+const dbPath = '/Documents/AlexFineas/Server-Git/Info-Screen-fuer-die-Durchfuehrung-der-muendlichen-Reife-und-Diplompruefung/termine.db';
+const db = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY, (err) => {
+    if (err) {
+        console.error('❌ Fehler beim Öffnen der Datenbank:', err.message);
+        console.error('📁 Geprüfter Pfad:', dbPath);
+    } else {
+        console.log('✅ Verbindung zur Datenbank termine.db erfolgreich hergestellt');
+    }
+});
+
+// Session speichern (damit Login "merkt", dass man drin ist)
 app.use(session({
     secret: process.env.SESSION_SECRET || 'BITTE_IN_.env_SETZEN',
     resave: false,
@@ -22,20 +33,20 @@ app.use(session({
     cookie: { secure: true, sameSite: 'lax' } // weil HTTPS
 }));
 
-//  Schutz: Nur eingeloggte dürfen /home, /zweig, /klasse sehen
+// Schutz: Nur eingeloggte dürfen /home, /zweig, /klasse sehen
 function requireAuth(req, res, next) {
     if (req.session && req.session.user) return next();
     return res.redirect('/');
 }
 
-//  Helper: JWT payload (Base64URL) decodieren
+// Helper: JWT payload (Base64URL) decodieren
 function base64UrlDecode(str) {
     str = str.replace(/-/g, '+').replace(/_/g, '/');
     while (str.length % 4) str += '=';
     return Buffer.from(str, 'base64').toString('utf8');
 }
 
-// Klassen-Zuordnung zu den Zweigen
+// Klassen-Zuordnung zu den Zweigen (als Backup/Fallback)
 const klassen = {
     elektronik: ['5AHEL', '5BHEL', '5CHEL'],
     elektrotechnik: ['5AHET', '5BHET', '5CHET'],
@@ -56,6 +67,173 @@ const zweigNamen = {
     maschinenbau: 'Maschinenbau',
     wirtschaft: 'Wirtschaft'
 };
+
+// NEU - Feste Zweig-Zuordnung für die automatische Erkennung
+const zweigZuordnung = {
+    '5AHEL': 'elektronik',
+    '5BHEL': 'elektronik',
+    '5CHEL': 'elektronik',
+    '5AHET': 'elektrotechnik',
+    '5BHET': 'elektrotechnik',
+    '5CHET': 'elektrotechnik',
+    '5AHMBS': 'maschinenbau',
+    '5BHMBZ': 'maschinenbau',
+    '5VHMBS': 'maschinenbau',
+    '5AHWIE': 'wirtschaft',
+    '5BHWIE': 'wirtschaft',
+    '5DHWIE': 'wirtschaft'
+};
+
+// NEU - Funktion zum Auslesen der Klassenstruktur aus der Datenbank
+function getKlassenStrukturAusDB() {
+    return new Promise((resolve, reject) => {
+        // Zuerst versuchen wir verschiedene mögliche Spaltennamen zu finden
+        db.all("SELECT name FROM sqlite_master WHERE type='table'", [], (err, tables) => {
+            if (err) {
+                return reject(err);
+            }
+
+            // Versuche verschiedene Tabellennamen (termine, klassen, schueler, etc.)
+            const possibleTables = ['termine', 'klassen', 'schueler', 'students', 'classes'];
+            let targetTable = null;
+
+            for (const table of tables) {
+                if (possibleTables.includes(table.name.toLowerCase())) {
+                    targetTable = table.name;
+                    break;
+                }
+            }
+
+            if (!targetTable && tables.length > 0) {
+                targetTable = tables[0].name; // Nimm erste Tabelle als Fallback
+            }
+
+            if (!targetTable) {
+                console.warn('⚠️ Keine passende Tabelle gefunden, verwende statische Klassen');
+                return resolve(null);
+            }
+
+            // Versuche Klassen zu extrahieren (verschiedene mögliche Spaltennamen)
+            const query = `SELECT DISTINCT 
+                COALESCE(klasse, class, klassenname, gruppe) as klasse 
+                FROM ${targetTable} 
+                WHERE COALESCE(klasse, class, klassenname, gruppe) IS NOT NULL`;
+
+            db.all(query, [], (err, rows) => {
+                if (err) {
+                    console.error('❌ Fehler beim Auslesen der Klassen:', err.message);
+                    return resolve(null);
+                }
+
+                // Struktur aufbauen
+                const struktur = {
+                    elektronik: {},
+                    elektrotechnik: {},
+                    maschinenbau: {},
+                    wirtschaft: {}
+                };
+
+                rows.forEach(row => {
+                    const klassenname = row.klasse;
+                    const zweig = zweigZuordnung[klassenname];
+
+                    if (zweig) {
+                        struktur[zweig][klassenname] = []; // Später mit Schülern füllen
+                    }
+                });
+
+                console.log('✅ Klassenstruktur aus DB geladen:', JSON.stringify(struktur, null, 2));
+                resolve(struktur);
+            });
+        });
+    });
+}
+
+// NEU - Funktion zum Laden der Schüler für eine bestimmte Klasse
+function getSchuelerFuerKlasse(klassenname) {
+    return new Promise((resolve, reject) => {
+        const query = `
+            SELECT * FROM termine 
+            WHERE COALESCE(klasse, class, klassenname, gruppe) = ? 
+            ORDER BY nachname, vorname
+        `;
+
+        db.all(query, [klassenname], (err, rows) => {
+            if (err) {
+                console.error('❌ Fehler beim Laden der Schüler:', err.message);
+                return resolve([]);
+            }
+            resolve(rows);
+        });
+    });
+}
+
+// NEU - Debug-Route: Zeigt Datenbankstruktur
+app.get('/debug/db', requireAuth, (req, res) => {
+    db.all("SELECT name FROM sqlite_master WHERE type='table'", [], (err, tables) => {
+        if (err) {
+            return res.status(500).json({ error: err.message });
+        }
+
+        const promises = tables.map(table => {
+            return new Promise((resolve) => {
+                db.all(`SELECT * FROM ${table.name} LIMIT 5`, [], (err, rows) => {
+                    if (err) {
+                        resolve({ table: table.name, error: err.message });
+                    } else {
+                        resolve({ table: table.name, rows: rows });
+                    }
+                });
+            });
+        });
+
+        Promise.all(promises).then(results => {
+            res.json({
+                database: dbPath,
+                tables: results
+            });
+        });
+    });
+});
+
+// NEU - Test-Route: Zeigt Klassenstruktur als JSON
+app.get('/klassenstruktur', requireAuth, async (req, res) => {
+    try {
+        const struktur = await getKlassenStrukturAusDB();
+        if (!struktur) {
+            return res.json({
+                message: 'Keine Klassen in DB gefunden, verwende statische Klassen',
+                struktur: klassen
+            });
+        }
+        res.json(struktur);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// NEU - Test-Route: Zeigt alle Zweige mit Klassen
+app.get('/zweige', requireAuth, async (req, res) => {
+    try {
+        const struktur = await getKlassenStrukturAusDB();
+        if (!struktur) {
+            return res.json({
+                message: 'Keine Klassen in DB gefunden',
+                zweige: Object.keys(klassen),
+                klassen: klassen
+            });
+        }
+
+        const result = {};
+        for (const [zweig, klassenObj] of Object.entries(struktur)) {
+            result[zweig] = Object.keys(klassenObj);
+        }
+
+        res.json(result);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
 
 app.get('/', (req, res) => {
     // Wenn schon eingeloggt -> direkt /home
@@ -132,7 +310,6 @@ app.get('/microsoft-login', (req, res) => {
     res.redirect(authUrl);
 });
 
-// NEU: Callback Route (Microsoft schickt nach Login hierhin)
 app.get('/auth/callback', async (req, res) => {
     const code = req.query.code;
     if (!code) {
@@ -144,7 +321,6 @@ app.get('/auth/callback', async (req, res) => {
     }
 
     try {
-        // Code -> Token tauschen
         const tokenResponse = await axios.post(
             'https://login.microsoftonline.com/organizations/oauth2/v2.0/token',
             new URLSearchParams({
@@ -162,7 +338,6 @@ app.get('/auth/callback', async (req, res) => {
             return res.status(500).send('Kein id_token erhalten.');
         }
 
-        // ID Token auslesen
         const payload = JSON.parse(base64UrlDecode(idToken.split('.')[1]));
         const email = (payload.preferred_username || payload.upn || payload.email || '').toLowerCase();
 
@@ -170,7 +345,6 @@ app.get('/auth/callback', async (req, res) => {
             return res.status(403).send('Keine Email im Token gefunden.');
         }
 
-        //  Domain-Check: NUR @ms.bulme.at
         if (!email.endsWith('@ms.bulme.at')) {
             return res.status(403).send(`
         <h1>Zugriff verweigert</h1>
@@ -180,7 +354,6 @@ app.get('/auth/callback', async (req, res) => {
       `);
         }
 
-        //  Login OK -> Session setzen -> /home
         req.session.user = { email };
         return res.redirect('/home');
 
@@ -194,13 +367,17 @@ app.get('/auth/callback', async (req, res) => {
     }
 });
 
-// optional: Logout
 app.get('/logout', (req, res) => {
     req.session.destroy(() => res.redirect('/'));
 });
 
-app.get('/home', requireAuth, (req, res) => {
-    res.send(`
+// NEU - /home verwendet jetzt Daten aus der DB
+app.get('/home', requireAuth, async (req, res) => {
+    try {
+        const struktur = await getKlassenStrukturAusDB();
+        const aktiveZweige = struktur ? Object.keys(struktur).filter(zweig => Object.keys(struktur[zweig]).length > 0) : Object.keys(klassen);
+
+        res.send(`
     <!DOCTYPE html>
     <html lang="de">
     <head>
@@ -246,30 +423,41 @@ app.get('/home', requireAuth, (req, res) => {
       <div class="container">
         <h1>Wähle Sie ihr Zweig aus</h1>
         <div class="button-grid">
-          <a href="/zweig/elektronik" class="zweig-button elektronik">Elektronik</a>
-          <a href="/zweig/elektrotechnik" class="zweig-button elektrotechnik">Elektrotechnik</a>
-          <a href="/zweig/maschinenbau" class="zweig-button maschinenbau">Maschinenbau</a>
-          <a href="/zweig/wirtschaft" class="zweig-button wirtschaft">Wirtschaft</a>
+          ${aktiveZweige.map(zweig => `<a href="/zweig/${zweig}" class="zweig-button ${zweig}">${zweigNamen[zweig]}</a>`).join('')}
         </div>
       </div>
     </body>
     </html>
   `);
+    } catch (err) {
+        console.error('Fehler beim Laden der Zweige:', err);
+        res.status(500).send('Fehler beim Laden der Daten');
+    }
 });
 
-app.get('/zweig/:zweig', requireAuth, (req, res) => {
+// NEU - /zweig/:zweig verwendet jetzt Daten aus der DB
+app.get('/zweig/:zweig', requireAuth, async (req, res) => {
     const zweig = req.params.zweig.toLowerCase();
 
-    if (!klassen[zweig]) {
-        return res.redirect('/home');
-    }
+    try {
+        const struktur = await getKlassenStrukturAusDB();
+        let klassenListe;
 
-    const klassenListe = klassen[zweig];
-    const farbe = zweigFarben[zweig];
-    const name = zweigNamen[zweig];
-    const textFarbe = (zweig === 'elektrotechnik' || zweig === 'wirtschaft') ? '#333' : 'white';
+        if (struktur && struktur[zweig]) {
+            klassenListe = Object.keys(struktur[zweig]);
+        } else {
+            klassenListe = klassen[zweig] || [];
+        }
 
-    res.send(`
+        if (klassenListe.length === 0) {
+            return res.redirect('/home');
+        }
+
+        const farbe = zweigFarben[zweig];
+        const name = zweigNamen[zweig];
+        const textFarbe = (zweig === 'elektrotechnik' || zweig === 'wirtschaft') ? '#333' : 'white';
+
+        res.send(`
     <!DOCTYPE html>
     <html lang="de">
     <head>
@@ -308,27 +496,31 @@ app.get('/zweig/:zweig', requireAuth, (req, res) => {
     </body>
     </html>
   `);
+    } catch (err) {
+        console.error('Fehler beim Laden der Klassen:', err);
+        res.status(500).send('Fehler beim Laden der Daten');
+    }
 });
 
-app.get('/klasse/:klasse', requireAuth, (req, res) => {
+// NEU - /klasse/:klasse zeigt jetzt Schüler aus der DB
+app.get('/klasse/:klasse', requireAuth, async (req, res) => {
     const klasse = req.params.klasse.toUpperCase();
 
-    let zweig = '';
-    for (const [key, value] of Object.entries(klassen)) {
-        if (value.includes(klasse)) {
-            zweig = key;
-            break;
+    try {
+        // Finde den Zweig dieser Klasse
+        const zweig = zweigZuordnung[klasse];
+
+        if (!zweig) {
+            return res.redirect('/home');
         }
-    }
 
-    if (!zweig) {
-        return res.redirect('/home');
-    }
+        // NEU - Lade Schüler aus der Datenbank
+        const schueler = await getSchuelerFuerKlasse(klasse);
 
-    const farbe = zweigFarben[zweig];
-    const textFarbe = (zweig === 'elektrotechnik' || zweig === 'wirtschaft') ? '#333' : 'white';
+        const farbe = zweigFarben[zweig];
+        const textFarbe = (zweig === 'elektrotechnik' || zweig === 'wirtschaft') ? '#333' : 'white';
 
-    res.send(`
+        res.send(`
     <!DOCTYPE html>
     <html lang="de">
     <head>
@@ -337,25 +529,49 @@ app.get('/klasse/:klasse', requireAuth, (req, res) => {
       <title>Klasse ${klasse}</title>
       <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: Arial, sans-serif; background: linear-gradient(135deg, #07175e 0%, #07175e 100%); min-height: 100vh; display: flex; justify-content: center; align-items: center; padding: 20px; }
-        .container { background: white; border-radius: 20px; padding: 60px; box-shadow: 0 20px 60px rgba(0,0,0,0.3); max-width: 700px; width: 100%; text-align: center; }
+        body { font-family: Arial, sans-serif; background: linear-gradient(135deg, #07175e 0%, #07175e 100%); min-height: 100vh; padding: 40px 20px; }
+        .container { background: white; border-radius: 20px; padding: 60px; box-shadow: 0 20px 60px rgba(0,0,0,0.3); max-width: 900px; margin: 0 auto; }
         .back-button { display: inline-block; margin-bottom: 30px; padding: 12px 25px; background-color: #666; color: white; text-decoration: none; border-radius: 8px; transition: background-color 0.3s; }
         .back-button:hover { background-color: #444; }
         .klasse-badge { display: inline-block; padding: 30px 60px; background-color: ${farbe}; color: ${textFarbe}; font-size: 3em; font-weight: bold; border-radius: 15px; margin: 30px 0; box-shadow: 0 10px 30px rgba(0,0,0,0.2); }
-        h1 { color: #333; font-size: 2em; margin-top: 20px; }
-        p { color: #666; font-size: 1.2em; margin-top: 20px; }
+        h1 { color: #333; font-size: 2em; margin-top: 20px; text-align: center; }
+        p { color: #666; font-size: 1.2em; margin-top: 20px; text-align: center; }
+        .schueler-liste { margin-top: 40px; }
+        .schueler-item { padding: 15px; margin: 10px 0; background: #f5f5f5; border-radius: 8px; border-left: 4px solid ${farbe}; }
+        .schueler-name { font-weight: bold; font-size: 1.1em; color: #333; }
+        .schueler-info { color: #666; font-size: 0.9em; margin-top: 5px; }
       </style>
     </head>
     <body>
       <div class="container">
         <a href="/zweig/${zweig}" class="back-button">← Zurück zu ${zweigNamen[zweig]}</a>
-        <div class="klasse-badge">${klasse}</div>
-        <h1>Du bist auf Klasse ${klasse} gegangen</h1>
-        <p>Hier werden später die Schüler und Informationen dieser Klasse angezeigt.</p>
+        <div style="text-align: center;">
+          <div class="klasse-badge">${klasse}</div>
+          <h1>Klasse ${klasse}</h1>
+          ${schueler.length > 0 ? `<p>${schueler.length} Schüler gefunden</p>` : '<p>Keine Schüler in der Datenbank gefunden.</p>'}
+        </div>
+        ${schueler.length > 0 ? `
+        <div class="schueler-liste">
+          ${schueler.map(s => `
+            <div class="schueler-item">
+              <div class="schueler-name">${s.vorname || s.firstname || 'Vorname'} ${s.nachname || s.lastname || 'Nachname'}</div>
+              <div class="schueler-info">
+                ${s.termin ? `Termin: ${s.termin}` : ''}
+                ${s.pruefungsfach ? ` | Fach: ${s.pruefungsfach}` : ''}
+                ${s.raum ? ` | Raum: ${s.raum}` : ''}
+              </div>
+            </div>
+          `).join('')}
+        </div>
+        ` : ''}
       </div>
     </body>
     </html>
   `);
+    } catch (err) {
+        console.error('Fehler beim Laden der Schüler:', err);
+        res.status(500).send('Fehler beim Laden der Daten');
+    }
 });
 
 const httpsOptions = {
@@ -365,4 +581,16 @@ const httpsOptions = {
 
 https.createServer(httpsOptions, app).listen(process.env.PORT || port, () => {
     console.log('HTTPS-Server läuft auf Port ' + (process.env.PORT || port));
+});
+
+// NEU - Sauberes Schließen der Datenbankverbindung beim Beenden
+process.on('SIGINT', () => {
+    db.close((err) => {
+        if (err) {
+            console.error('❌ Fehler beim Schließen der Datenbank:', err.message);
+        } else {
+            console.log('✅ Datenbankverbindung geschlossen');
+        }
+        process.exit(0);
+    });
 });
