@@ -18,10 +18,10 @@ let isLoggedIn = false;
 const dbPath = '/Documents/AlexFineas/Server-Git/Info-Screen-fuer-die-Durchfuehrung-der-muendlichen-Reife-und-Diplompruefung/termineordner';
 const db = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY, (err) => {
     if (err) {
-        console.error('❌ Fehler beim Öffnen der Datenbank:', err.message);
-        console.error('📁 Geprüfter Pfad:', dbPath);
+        console.error(' Fehler beim Öffnen der Datenbank:', err.message);
+        console.error(' Geprüfter Pfad:', dbPath);
     } else {
-        console.log('✅ Verbindung zur Datenbank termine.db erfolgreich hergestellt');
+        console.log(' Verbindung zur Datenbank termine.db erfolgreich hergestellt');
     }
 });
 
@@ -109,7 +109,7 @@ function getKlassenStrukturAusDB() {
             }
 
             if (!targetTable) {
-                console.warn('⚠️ Keine passende Tabelle gefunden, verwende statische Klassen');
+                console.warn('Keine passende Tabelle gefunden, verwende statische Klassen');
                 return resolve(null);
             }
 
@@ -121,7 +121,7 @@ function getKlassenStrukturAusDB() {
 
             db.all(query, [], (err, rows) => {
                 if (err) {
-                    console.error('❌ Fehler beim Auslesen der Klassen:', err.message);
+                    console.error('Fehler beim Auslesen der Klassen:', err.message);
                     return resolve(null);
                 }
 
@@ -142,7 +142,7 @@ function getKlassenStrukturAusDB() {
                     }
                 });
 
-                console.log('✅ Klassenstruktur aus DB geladen:', JSON.stringify(struktur, null, 2));
+                console.log('Klassenstruktur aus DB geladen:', JSON.stringify(struktur, null, 2));
                 resolve(struktur);
             });
         });
@@ -160,7 +160,7 @@ function getSchuelerFuerKlasse(klassenname) {
 
         db.all(query, [klassenname], (err, rows) => {
             if (err) {
-                console.error('❌ Fehler beim Laden der Schüler:', err.message);
+                console.error('Fehler beim Laden der Schüler:', err.message);
                 return resolve([]);
             }
             resolve(rows);
@@ -537,12 +537,16 @@ app.get('/klasse/:klasse', requireAuth, async (req, res) => {
         h1 { color: #333; font-size: 2em; margin-top: 20px; text-align: center; }
         p { color: #666; font-size: 1.2em; margin-top: 20px; text-align: center; }
         .schueler-liste { margin-top: 40px; }
-        .schueler-item { padding: 15px; margin: 10px 0; background: #f5f5f5; border-radius: 8px; border-left: 4px solid ${farbe}; }
+        
+        :root {--zweigfarbe: #2d5016;}
+        
+        .schueler-item { padding: 15px; margin: 10px 0; background: #f5f5f5; border-radius: 8px; border-left: 4px solid var(--zweigfarbe); }
         .schueler-name { font-weight: bold; font-size: 1.1em; color: #333; }
         .schueler-info { color: #666; font-size: 0.9em; margin-top: 5px; }
       </style>
     </head>
     <body>
+        <body style="--zweigfarbe: ${farbe};">
       <div class="container">
         <a href="/zweig/${zweig}" class="back-button">← Zurück zu ${zweigNamen[zweig]}</a>
         <div style="text-align: center;">
@@ -587,9 +591,9 @@ https.createServer(httpsOptions, app).listen(process.env.PORT || port, () => {
 process.on('SIGINT', () => {
     db.close((err) => {
         if (err) {
-            console.error('❌ Fehler beim Schließen der Datenbank:', err.message);
+            console.error('Fehler beim Schließen der Datenbank:', err.message);
         } else {
-            console.log('✅ Datenbankverbindung geschlossen');
+            console.log('Datenbankverbindung geschlossen');
         }
         process.exit(0);
     });
