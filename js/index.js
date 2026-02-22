@@ -10,7 +10,7 @@ const fs = require('fs');
 require('dotenv').config({override: true});
 
 // NEU - SQLite3 Import
-const sqlite3 = require('sqlite3').verbose();
+//const sqlite3 = require('sqlite3').verbose();
 
 let isLoggedIn = false;
 
