@@ -9,21 +9,7 @@ const https = require('https');
 const fs = require('fs');
 require('dotenv').config({override: true});
 
-// NEU - SQLite3 Import
-//const sqlite3 = require('sqlite3').verbose();
-
 let isLoggedIn = false;
-
-/* NEU - Datenbankverbindung erstellen
-const dbPath = '/Documents/AlexFineas/Server-Git/Info-Screen-fuer-die-Durchfuehrung-der-muendlichen-Reife-und-Diplompruefung/termineordner/termine.db';
-const db = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY, (err) => {
-    if (err) {
-        console.error('Fehler beim Öffnen der DB:', err.message);
-        console.error('Geprüfter Pfad:', dbPath);
-    } else {
-        console.log(' Verbindung zur Datenbank termine.db erfolgreich hergestellt');
-    }
-});*/
 
 const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
@@ -40,13 +26,12 @@ const db = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY, (err) => {
     }
 });
 
-
 // Session speichern (damit Login "merkt", dass man drin ist)
 app.use(session({
     secret: process.env.SESSION_SECRET || 'BITTE_IN_.env_SETZEN',
     resave: false,
     saveUninitialized: false,
-    cookie: { secure: true, sameSite: 'lax' } // weil HTTPS
+    cookie: { secure: true, sameSite: 'lax' }
 }));
 
 // Schutz: Nur eingeloggte dürfen /home, /zweig, /klasse sehen
@@ -84,7 +69,7 @@ const zweigNamen = {
     wirtschaft: 'Wirtschaft'
 };
 
-// NEU - Feste Zweig-Zuordnung für die automatische Erkennung
+// Feste Zweig-Zuordnung für die automatische Erkennung
 const zweigZuordnung = {
     '5AHEL': 'elektronik',
     '5BHEL': 'elektronik',
@@ -100,77 +85,51 @@ const zweigZuordnung = {
     '5DHWIE': 'wirtschaft'
 };
 
-// NEU - Funktion zum Auslesen der Klassenstruktur aus der Datenbank
+// Funktion zum Auslesen der Klassenstruktur aus der Datenbank
 function getKlassenStrukturAusDB() {
     return new Promise((resolve, reject) => {
-        // Zuerst versuchen wir verschiedene mögliche Spaltennamen zu finden
-        db.all("SELECT name FROM sqlite_master WHERE type='table'", [], (err, tables) => {
+        const query = `SELECT DISTINCT klasse FROM termine WHERE klasse IS NOT NULL ORDER BY klasse`;
+
+        db.all(query, [], (err, rows) => {
             if (err) {
-                return reject(err);
-            }
-
-            // Versuche verschiedene Tabellennamen (termine, klassen, schueler, etc.)
-            const possibleTables = ['termine', 'klassen', 'schueler', 'students', 'classes'];
-            let targetTable = null;
-
-            for (const table of tables) {
-                if (possibleTables.includes(table.name.toLowerCase())) {
-                    targetTable = table.name;
-                    break;
-                }
-            }
-
-            if (!targetTable && tables.length > 0) {
-                targetTable = tables[0].name; // Nimm erste Tabelle als Fallback
-            }
-
-            if (!targetTable) {
-                console.warn('Keine passende Tabelle gefunden, verwende statische Klassen');
+                console.error('Fehler beim Auslesen der Klassen:', err.message);
                 return resolve(null);
             }
 
-            // Versuche Klassen zu extrahieren (verschiedene mögliche Spaltennamen)
-            const query = `SELECT DISTINCT 
-                COALESCE(klasse, class, klassenname, gruppe) as klasse 
-                FROM ${targetTable} 
-                WHERE COALESCE(klasse, class, klassenname, gruppe) IS NOT NULL`;
+            console.log('Gefundene Klassen in DB:', rows);
 
-            db.all(query, [], (err, rows) => {
-                if (err) {
-                    console.error('Fehler beim Auslesen der Klassen:', err.message);
-                    return resolve(null);
+            // Struktur aufbauen
+            const struktur = {
+                elektronik: {},
+                elektrotechnik: {},
+                maschinenbau: {},
+                wirtschaft: {}
+            };
+
+            rows.forEach(row => {
+                const klassenname = row.klasse;
+                const zweig = zweigZuordnung[klassenname];
+
+                if (zweig) {
+                    struktur[zweig][klassenname] = [];
+                    console.log(`Klasse ${klassenname} zu Zweig ${zweig} zugeordnet`);
+                } else {
+                    console.log(`Klasse ${klassenname} hat keine Zweig-Zuordnung`);
                 }
-
-                // Struktur aufbauen
-                const struktur = {
-                    elektronik: {},
-                    elektrotechnik: {},
-                    maschinenbau: {},
-                    wirtschaft: {}
-                };
-
-                rows.forEach(row => {
-                    const klassenname = row.klasse;
-                    const zweig = zweigZuordnung[klassenname];
-
-                    if (zweig) {
-                        struktur[zweig][klassenname] = []; // Später mit Schülern füllen
-                    }
-                });
-
-                console.log('Klassenstruktur aus DB geladen:', JSON.stringify(struktur, null, 2));
-                resolve(struktur);
             });
+
+            console.log('Klassenstruktur aus DB geladen:', JSON.stringify(struktur, null, 2));
+            resolve(struktur);
         });
     });
 }
 
-// NEU - Funktion zum Laden der Schüler für eine bestimmte Klasse
+// Funktion zum Laden der Schüler für eine bestimmte Klasse
 function getSchuelerFuerKlasse(klassenname) {
     return new Promise((resolve, reject) => {
         const query = `
-            SELECT * FROM termine 
-            WHERE COALESCE(klasse, class, klassenname, gruppe) = ? 
+            SELECT * FROM termine
+            WHERE klasse = ?
             ORDER BY nachname, vorname
         `;
 
@@ -179,12 +138,13 @@ function getSchuelerFuerKlasse(klassenname) {
                 console.error('Fehler beim Laden der Schüler:', err.message);
                 return resolve([]);
             }
+            console.log(`${rows.length} Schüler gefunden für Klasse ${klassenname}`);
             resolve(rows);
         });
     });
 }
 
-// NEU - Debug-Route: Zeigt Datenbankstruktur
+// Debug-Route: Zeigt Datenbankstruktur
 app.get('/debug/db', requireAuth, (req, res) => {
     db.all("SELECT name FROM sqlite_master WHERE type='table'", [], (err, tables) => {
         if (err) {
@@ -212,7 +172,7 @@ app.get('/debug/db', requireAuth, (req, res) => {
     });
 });
 
-// NEU - Test-Route: Zeigt Klassenstruktur als JSON
+// Test-Route: Zeigt Klassenstruktur als JSON
 app.get('/klassenstruktur', requireAuth, async (req, res) => {
     try {
         const struktur = await getKlassenStrukturAusDB();
@@ -228,7 +188,7 @@ app.get('/klassenstruktur', requireAuth, async (req, res) => {
     }
 });
 
-// NEU - Test-Route: Zeigt alle Zweige mit Klassen
+// Test-Route: Zeigt alle Zweige mit Klassen
 app.get('/zweige', requireAuth, async (req, res) => {
     try {
         const struktur = await getKlassenStrukturAusDB();
@@ -252,7 +212,6 @@ app.get('/zweige', requireAuth, async (req, res) => {
 });
 
 app.get('/', (req, res) => {
-    // Wenn schon eingeloggt -> direkt /home
     if (req.session && req.session.user) return res.redirect('/home');
 
     res.send(`
@@ -387,7 +346,6 @@ app.get('/logout', (req, res) => {
     req.session.destroy(() => res.redirect('/'));
 });
 
-// NEU - /home verwendet jetzt Daten aus der DB
 app.get('/home', requireAuth, async (req, res) => {
     try {
         const struktur = await getKlassenStrukturAusDB();
@@ -430,14 +388,14 @@ app.get('/home', requireAuth, async (req, res) => {
         }
         .zweig-button:hover { transform: translateY(-5px); box-shadow: 0 10px 25px rgba(0,0,0,0.3); }
         .elektronik { background-color: #2d5016; color: white; }
-        .elektrotechnik { background-color: #e60505; color: #333; }
+        .elektrotechnik { background-color: #e60505; color: white; }
         .maschinenbau { background-color: #4f56d0; color: white; }
         .wirtschaft { background-color: #ffeb3b; color: #333; }
       </style>
     </head>
     <body>
       <div class="container">
-        <h1>Wähle Sie ihr Zweig aus</h1>
+        <h1>Wählen Sie Ihren Zweig aus</h1>
         <div class="button-grid">
           ${aktiveZweige.map(zweig => `<a href="/zweig/${zweig}" class="zweig-button ${zweig}">${zweigNamen[zweig]}</a>`).join('')}
         </div>
@@ -451,7 +409,6 @@ app.get('/home', requireAuth, async (req, res) => {
     }
 });
 
-// NEU - /zweig/:zweig verwendet jetzt Daten aus der DB
 app.get('/zweig/:zweig', requireAuth, async (req, res) => {
     const zweig = req.params.zweig.toLowerCase();
 
@@ -502,7 +459,7 @@ app.get('/zweig/:zweig', requireAuth, async (req, res) => {
     </head>
     <body>
       <div class="container">
-        <a href="/home" class="back-button">← Zurück zur Zweigauswahl</a>
+        <a href="/home" class="back-button">Zurück zur Zweigauswahl</a>
         <h1>Klassen</h1>
         <h2>${name}</h2>
         <div class="klassen-grid">
@@ -518,19 +475,16 @@ app.get('/zweig/:zweig', requireAuth, async (req, res) => {
     }
 });
 
-// NEU - /klasse/:klasse zeigt jetzt Schüler aus der DB
 app.get('/klasse/:klasse', requireAuth, async (req, res) => {
     const klasse = req.params.klasse.toUpperCase();
 
     try {
-        // Finde den Zweig dieser Klasse
         const zweig = zweigZuordnung[klasse];
 
         if (!zweig) {
             return res.redirect('/home');
         }
 
-        // NEU - Lade Schüler aus der Datenbank
         const schueler = await getSchuelerFuerKlasse(klasse);
 
         const farbe = zweigFarben[zweig];
@@ -546,39 +500,84 @@ app.get('/klasse/:klasse', requireAuth, async (req, res) => {
       <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { font-family: Arial, sans-serif; background: linear-gradient(135deg, #07175e 0%, #07175e 100%); min-height: 100vh; padding: 40px 20px; }
-        .container { background: white; border-radius: 20px; padding: 60px; box-shadow: 0 20px 60px rgba(0,0,0,0.3); max-width: 900px; margin: 0 auto; }
+        .container { background: white; border-radius: 20px; padding: 60px; box-shadow: 0 20px 60px rgba(0,0,0,0.3); max-width: 1000px; margin: 0 auto; }
         .back-button { display: inline-block; margin-bottom: 30px; padding: 12px 25px; background-color: #666; color: white; text-decoration: none; border-radius: 8px; transition: background-color 0.3s; }
         .back-button:hover { background-color: #444; }
         .klasse-badge { display: inline-block; padding: 30px 60px; background-color: ${farbe}; color: ${textFarbe}; font-size: 3em; font-weight: bold; border-radius: 15px; margin: 30px 0; box-shadow: 0 10px 30px rgba(0,0,0,0.2); }
         h1 { color: #333; font-size: 2em; margin-top: 20px; text-align: center; }
         p { color: #666; font-size: 1.2em; margin-top: 20px; text-align: center; }
         .schueler-liste { margin-top: 40px; }
-        
-        :root {--zweigfarbe: #2d5016;}
-        
-        .schueler-item { padding: 15px; margin: 10px 0; background: #f5f5f5; border-radius: 8px; border-left: 4px solid var(--zweigfarbe); }
-        .schueler-name { font-weight: bold; font-size: 1.1em; color: #333; }
-        .schueler-info { color: #666; font-size: 0.9em; margin-top: 5px; }
+        .schueler-item { 
+          padding: 20px; 
+          margin: 15px 0; 
+          background: #f9f9f9; 
+          border-radius: 10px; 
+          border-left: 5px solid ${farbe}; 
+          transition: all 0.3s ease;
+          box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+        .schueler-item:hover {
+          transform: translateX(5px);
+          box-shadow: 0 4px 10px rgba(0,0,0,0.15);
+        }
+        .schueler-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          margin-bottom: 10px;
+        }
+        .schueler-name { 
+          font-weight: bold; 
+          font-size: 1.3em; 
+          color: #333; 
+        }
+        .schueler-datum {
+          background: ${farbe};
+          color: ${textFarbe};
+          padding: 5px 15px;
+          border-radius: 20px;
+          font-size: 0.9em;
+          font-weight: bold;
+        }
+        .schueler-details {
+          display: grid;
+          grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+          gap: 10px;
+          margin-top: 10px;
+        }
+        .detail-item {
+          color: #555;
+          font-size: 0.95em;
+          padding: 5px;
+        }
+        .detail-label {
+          font-weight: bold;
+          color: #333;
+        }
       </style>
     </head>
     <body>
-        <body style="--zweigfarbe: ${farbe};">
       <div class="container">
-        <a href="/zweig/${zweig}" class="back-button">← Zurück zu ${zweigNamen[zweig]}</a>
+        <a href="/zweig/${zweig}" class="back-button">Zurück zu ${zweigNamen[zweig]}</a>
         <div style="text-align: center;">
           <div class="klasse-badge">${klasse}</div>
           <h1>Klasse ${klasse}</h1>
-          ${schueler.length > 0 ? `<p>${schueler.length} Schüler gefunden</p>` : '<p>Keine Schüler in der Datenbank gefunden.</p>'}
+          ${schueler.length > 0 ? `<p>${schueler.length} Schüler maturieren</p>` : '<p>Keine Schüler in der Datenbank gefunden.</p>'}
         </div>
         ${schueler.length > 0 ? `
         <div class="schueler-liste">
           ${schueler.map(s => `
             <div class="schueler-item">
-              <div class="schueler-name">${s.vorname || s.firstname || 'Vorname'} ${s.nachname || s.lastname || 'Nachname'}</div>
-              <div class="schueler-info">
-                ${s.termin ? `Termin: ${s.termin}` : ''}
-                ${s.pruefungsfach ? ` | Fach: ${s.pruefungsfach}` : ''}
-                ${s.raum ? ` | Raum: ${s.raum}` : ''}
+              <div class="schueler-header">
+                <div class="schueler-name">${s.vorname || 'Vorname'} ${s.nachname || 'Nachname'}</div>
+                ${s.datum ? `<div class="schueler-datum">${s.datum}</div>` : ''}
+              </div>
+              <div class="schueler-details">
+                ${s.fach ? `<div class="detail-item"><span class="detail-label">Fach:</span> ${s.fach}</div>` : ''}
+                ${s.pruefer ? `<div class="detail-item"><span class="detail-label">Prüfer:</span> ${s.pruefer}</div>` : ''}
+                ${s.beisitz ? `<div class="detail-item"><span class="detail-label">Beisitz:</span> ${s.beisitz}</div>` : ''}
+                ${s.rep_start ? `<div class="detail-item"><span class="detail-label">Vorbereitung:</span> ${s.rep_start} - ${s.prep_end || '?'}</div>` : ''}
+                ${s.exam_start ? `<div class="detail-item"><span class="detail-label">Prüfung:</span> ${s.exam_start} - ${s.exam_end || '?'}</div>` : ''}
               </div>
             </div>
           `).join('')}
@@ -600,10 +599,10 @@ const httpsOptions = {
 };
 
 https.createServer(httpsOptions, app).listen(process.env.PORT || port, () => {
-    console.log('HTTPS-Server läuft auf Port ' + (process.env.PORT || port));
+    console.log(`HTTPS-Server läuft auf https://localhost:${process.env.PORT || port}`);
+    console.log(`Debug-Route: https://localhost:${process.env.PORT || port}/debug/db`);
 });
 
-// NEU - Sauberes Schließen der Datenbankverbindung beim Beenden
 process.on('SIGINT', () => {
     db.close((err) => {
         if (err) {
