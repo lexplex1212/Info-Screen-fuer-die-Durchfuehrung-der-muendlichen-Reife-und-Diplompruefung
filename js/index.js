@@ -18,7 +18,7 @@ let isLoggedIn = false;
 const dbPath = '/Documents/AlexFineas/Server-Git/Info-Screen-fuer-die-Durchfuehrung-der-muendlichen-Reife-und-Diplompruefung/termineordner/termine.db';
 const db = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY, (err) => {
     if (err) {
-        console.error('Fehler beim Öffnen der Datenbank:', err.message);
+        console.error('Fehler beim Öffnen der DB:', err.message);
         console.error('Geprüfter Pfad:', dbPath);
     } else {
         console.log(' Verbindung zur Datenbank termine.db erfolgreich hergestellt');
