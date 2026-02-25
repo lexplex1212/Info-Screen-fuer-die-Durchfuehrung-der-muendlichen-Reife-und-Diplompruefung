@@ -10,6 +10,11 @@ require('dotenv').config({override: true});
 
 let isLoggedIn = false;
 
+// ===== TIMER-DAUER HIER ÄNDERN (in Sekunden) =====
+// 600 = 10 Min | 1200 = 20 Min | 1500 = 25 Min | 1800 = 30 Min
+const VORBEREITUNGS_TIMER = 120;
+// ================================================
+
 const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
 
@@ -26,7 +31,7 @@ const db = new sqlite3.Database(dbPath, (err) => {
                                                             schueler_id TEXT UNIQUE NOT NULL,
                                                             started_at INTEGER,
                                                             paused_at INTEGER,
-                                                            remaining_seconds REAL NOT NULL DEFAULT 1200,
+                                                            remaining_seconds REAL NOT NULL DEFAULT ${VORBEREITUNGS_TIMER},
                                                             state TEXT NOT NULL DEFAULT 'idle'
                 )`, (err) => {
             if (err) console.error('Fehler beim Erstellen der timer_status Tabelle:', err.message);
@@ -125,7 +130,7 @@ app.get('/api/timer/:schuelerId', requireAuth, (req, res) => {
     const id = req.params.schuelerId;
     db.get('SELECT * FROM timer_status WHERE schueler_id = ?', [id], (err, row) => {
         if (err) return res.status(500).json({ error: err.message });
-        if (!row) return res.json({ state: 'idle', remaining_seconds: 1200 });
+        if (!row) return res.json({ state: 'idle', remaining_seconds: VORBEREITUNGS_TIMER });
         if (row.state === 'running' && row.started_at) {
             const elapsed = (Date.now() - row.started_at) / 1000;
             const remaining = Math.max(0, row.remaining_seconds - elapsed);
@@ -138,11 +143,11 @@ app.get('/api/timer/:schuelerId', requireAuth, (req, res) => {
 app.post('/api/timer/:schuelerId/start', requireAuth, (req, res) => {
     const id = req.params.schuelerId;
     const now = Date.now();
-    db.run(`INSERT INTO timer_status (schueler_id, started_at, remaining_seconds, state) VALUES (?, ?, 1200, 'running')
-                ON CONFLICT(schueler_id) DO UPDATE SET started_at = ?, remaining_seconds = 1200, state = 'running', paused_at = NULL`,
+    db.run(`INSERT INTO timer_status (schueler_id, started_at, remaining_seconds, state) VALUES (?, ?, ${VORBEREITUNGS_TIMER}, 'running')
+                ON CONFLICT(schueler_id) DO UPDATE SET started_at = ?, remaining_seconds = ${VORBEREITUNGS_TIMER}, state = 'running', paused_at = NULL`,
         [id, now, now], function(err) {
             if (err) return res.status(500).json({ error: err.message });
-            res.json({ state: 'running', started_at: now, remaining_seconds: 1200 });
+            res.json({ state: 'running', started_at: now, remaining_seconds: VORBEREITUNGS_TIMER });
         });
 });
 
@@ -161,7 +166,7 @@ app.post('/api/timer/:schuelerId/resume', requireAuth, (req, res) => {
     const now = Date.now();
     db.get('SELECT remaining_seconds FROM timer_status WHERE schueler_id = ?', [id], (err, row) => {
         if (err) return res.status(500).json({ error: err.message });
-        const remaining = row ? row.remaining_seconds : 1200;
+        const remaining = row ? row.remaining_seconds : VORBEREITUNGS_TIMER;
         db.run(`UPDATE timer_status SET state = 'running', started_at = ?, paused_at = NULL WHERE schueler_id = ?`,
             [now, id], function(err2) {
                 if (err2) return res.status(500).json({ error: err2.message });
@@ -172,10 +177,10 @@ app.post('/api/timer/:schuelerId/resume', requireAuth, (req, res) => {
 
 app.post('/api/timer/:schuelerId/reset', requireAuth, (req, res) => {
     const id = req.params.schuelerId;
-    db.run(`UPDATE timer_status SET state = 'idle', started_at = NULL, paused_at = NULL, remaining_seconds = 1200 WHERE schueler_id = ?`,
+    db.run(`UPDATE timer_status SET state = 'idle', started_at = NULL, paused_at = NULL, remaining_seconds = ${VORBEREITUNGS_TIMER} WHERE schueler_id = ?`,
         [id], function(err) {
             if (err) return res.status(500).json({ error: err.message });
-            res.json({ state: 'idle', remaining_seconds: 1200 });
+            res.json({ state: 'idle', remaining_seconds: VORBEREITUNGS_TIMER });
         });
 });
 
@@ -511,7 +516,7 @@ app.get('/zweig/:zweig', requireAuth, async (req, res) => {
 <script>
 (function() {
 
-  var TOTAL = 1200;
+  var TOTAL = ${VORBEREITUNGS_TIMER};
   var timers = {};
 
   function get(sid) {
