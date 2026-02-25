@@ -12,8 +12,8 @@ let isLoggedIn = false;
 
 // ===== TIMER-DAUER HIER ÄNDERN (in Sekunden) =====
 // 600 = 10 Min | 1200 = 20 Min | 1500 = 25 Min | 1800 = 30 Min
-const VORBEREITUNGS_TIMER = 120;
-const PRUEFUNGS_TIMER = 120; // 12 Minuten
+const VORBEREITUNGS_TIMER = 1200;
+const PRUEFUNGS_TIMER = 720; // 12 Minuten
 // ================================================
 
 const sqlite3 = require('sqlite3').verbose();
@@ -59,9 +59,48 @@ const db = new sqlite3.Database(dbPath, (err) => {
             } else {
                 console.log('timer_status Tabelle bereit');
             }
+            // Nach Tabellen-Setup: Alle Schüler-Timer initialisieren
+            initAlleTimer();
         });
     }
 });
+
+// ===== BEIM START: Für jeden Schüler einen Timer-Eintrag anlegen (idle) =====
+function initAlleTimer() {
+    // Alle Klassen aus allen Zweigen sammeln
+    const alleKlassen = Object.values(klassen).flat();
+    const placeholders = alleKlassen.map(() => '?').join(',');
+
+    db.all(`SELECT rowid, klasse FROM termine WHERE klasse IN (${placeholders})`, alleKlassen, (err, rows) => {
+        if (err) {
+            console.error('Fehler beim Laden der Schüler für Timer-Init:', err.message);
+            return;
+        }
+        if (!rows || rows.length === 0) {
+            console.log('Keine Schüler in DB gefunden für Timer-Init.');
+            return;
+        }
+
+        let inserted = 0;
+        const stmt = db.prepare(`INSERT OR IGNORE INTO timer_status 
+            (schueler_id, remaining_seconds, state, exam_remaining, exam_state) 
+            VALUES (?, ${VORBEREITUNGS_TIMER}, 'idle', ${PRUEFUNGS_TIMER}, 'idle')`);
+
+        rows.forEach(row => {
+            // Zweig aus Klasse ableiten
+            const zweig = zweigZuordnung[row.klasse];
+            if (!zweig) return;
+            const schuelerId = zweig + '_' + row.rowid;
+            stmt.run([schuelerId], function(err) {
+                if (!err && this.changes > 0) inserted++;
+            });
+        });
+
+        stmt.finalize(() => {
+            console.log(`Timer-Init: ${rows.length} Schüler geprüft, ${inserted} neue Timer-Einträge erstellt.`);
+        });
+    });
+}
 
 app.use(express.json());
 
@@ -188,7 +227,7 @@ app.post('/api/timer/:id/reset', requireAuth, (req, res) => {
 app.post('/api/timer/:id/prep_done', requireAuth, (req, res) => {
     const id = req.params.id;
     db.run(`INSERT INTO timer_status (schueler_id, state, remaining_seconds) VALUES (?, 'prep_done', 0)
-            ON CONFLICT(schueler_id) DO UPDATE SET state='prep_done', remaining_seconds=0, started_at=NULL, paused_at=NULL`,
+                ON CONFLICT(schueler_id) DO UPDATE SET state='prep_done', remaining_seconds=0, started_at=NULL, paused_at=NULL`,
         [id], (err) => {
             if (err) return res.status(500).json({ error: err.message });
             res.json({ ok: true });
@@ -499,6 +538,7 @@ p.subtitle{color:#666;font-size:1.2em;margin-top:20px;text-align:center}
 var PREP = ${VORBEREITUNGS_TIMER};
 var EXAM = ${PRUEFUNGS_TIMER};
 var T = {};
+var lastRenderedState = {}; // Track welcher State zuletzt voll gerendert wurde
 
 function g(sid){
   if(!T[sid]) T[sid]={state:'idle',rem:PREP,iid:null, examState:'idle',examRem:EXAM,eiid:null, note:null,themen:null,komm:'',zeitDiff:null};
@@ -525,6 +565,44 @@ function examColor(p){
   return 'rgba('+r+','+gg+','+b+',0.45)';
 }
 
+// Aktuellen State-Key berechnen (um zu erkennen ob fullRender nötig ist)
+function stateKey(sid){
+  var t=g(sid);
+  return t.state+'|'+t.examState;
+}
+
+// ===== LIGHTWEIGHT TICK UPDATE (nur Timer-Text + Fortschritt, KEIN innerHTML) =====
+function tickUpdate(sid){
+  var t=g(sid);
+  var prog=document.getElementById('progress-'+sid);
+  var badge=document.getElementById('badge-'+sid);
+  var timeEl=document.querySelector('#expcontent-'+sid+' .timer-time');
+  var labEl=document.querySelector('#expcontent-'+sid+' .timer-label');
+  if(!prog) return;
+
+  if(t.state==='running'){
+    var p=Math.max(0,Math.min(1,1-(t.rem/PREP)));
+    prog.style.width=(p*100)+'%';
+    prog.style.backgroundColor=prepColor(p);
+    if(badge){badge.className='timer-badge visible st-prep'; badge.textContent=fmt(t.rem)+' ⏱';}
+    if(timeEl) timeEl.textContent=fmt(t.rem);
+  }
+  else if(t.examState==='running'){
+    var ep=t.examRem>=0?Math.max(0,Math.min(1,1-(t.examRem/EXAM))):1;
+    prog.style.width=(ep*100)+'%';
+    prog.style.backgroundColor=t.examRem<0?'rgba(231,76,60,0.35)':examColor(ep);
+    if(badge){badge.className='timer-badge visible st-exam'; badge.textContent=(t.examRem<0?'ÜBER ':'')+fmt(t.examRem)+' ⏱';}
+    if(timeEl){
+      timeEl.textContent=(t.examRem<0?'+':'')+fmt(t.examRem);
+      timeEl.style.color=t.examRem<0?'#c0392b':'#222';
+    }
+    if(labEl){
+      labEl.innerHTML=t.examRem<0?'<span class="timer-over">Prüfung überzogen!</span>':'Prüfung läuft...';
+    }
+  }
+}
+
+// ===== FULL RENDER (baut innerHTML komplett neu auf) =====
 function render(sid){
   var t=g(sid);
   var card=document.getElementById('card-'+sid);
@@ -533,17 +611,16 @@ function render(sid){
   var ec=document.getElementById('expcontent-'+sid);
   if(!card||!ec) return;
 
+  lastRenderedState[sid]=stateKey(sid);
   var html='';
   var p;
 
-  // ===== STATE: idle =====
   if(t.state==='idle'){
     prog.style.width='0%'; prog.style.backgroundColor='transparent';
     badge.className='timer-badge';
     html='<div class="timer-display"><div class="timer-time">'+fmt(PREP)+'</div><div class="timer-label">Vorbereitung</div></div>'
       +'<div class="timer-buttons"><button class="timer-btn btn-start" data-action="start" data-sid="'+sid+'">Vorbereitung starten</button></div>';
   }
-  // ===== STATE: running (Vorbereitung) =====
   else if(t.state==='running'){
     p=Math.max(0,Math.min(1,1-(t.rem/PREP)));
     prog.style.width=(p*100)+'%'; prog.style.backgroundColor=prepColor(p);
@@ -554,7 +631,6 @@ function render(sid){
       +'<button class="timer-btn btn-pause" data-action="pause" data-sid="'+sid+'">Pause</button>'
       +'<button class="timer-btn btn-reset" data-action="reset" data-sid="'+sid+'">Reset</button></div>';
   }
-  // ===== STATE: paused =====
   else if(t.state==='paused'){
     p=Math.max(0,Math.min(1,1-(t.rem/PREP)));
     prog.style.width=(p*100)+'%'; prog.style.backgroundColor=prepColor(p);
@@ -565,7 +641,6 @@ function render(sid){
       +'<button class="timer-btn btn-resume" data-action="resume" data-sid="'+sid+'">Fortsetzen</button>'
       +'<button class="timer-btn btn-reset" data-action="reset" data-sid="'+sid+'">Reset</button></div>';
   }
-  // ===== STATE: prep_done =====
   else if(t.state==='prep_done' && t.examState==='idle'){
     prog.style.width='100%'; prog.style.backgroundColor='rgba(255,152,0,0.45)';
     badge.className='timer-badge visible st-prep-done';
@@ -574,36 +649,23 @@ function render(sid){
       +'<div class="timer-buttons">'
       +'<button class="timer-btn btn-exam" data-action="exam_start" data-sid="'+sid+'">Prüfung starten</button></div>';
   }
-  // ===== STATE: exam running =====
   else if(t.examState==='running'){
-    var examP;
-    if(t.examRem>=0){
-      examP=Math.max(0,Math.min(1,1-(t.examRem/EXAM)));
-    } else {
-      examP=1;
-    }
-    prog.style.width=(examP*100)+'%';
-    if(t.examRem<0){
-      prog.style.backgroundColor='rgba(231,76,60,0.35)';
-    } else {
-      prog.style.backgroundColor=examColor(examP);
-    }
+    var ep=t.examRem>=0?Math.max(0,Math.min(1,1-(t.examRem/EXAM))):1;
+    prog.style.width=(ep*100)+'%';
+    prog.style.backgroundColor=t.examRem<0?'rgba(231,76,60,0.35)':examColor(ep);
     badge.className='timer-badge visible st-exam';
-    badge.textContent=(t.examRem<0?'ÜBER ':'') + fmt(t.examRem)+' ⏱';
-
-    var timeStyle=t.examRem<0?' style="color:#c0392b"':'';
-    html='<div class="timer-display"><div class="timer-time"'+timeStyle+'>'+(t.examRem<0?'+':'')+fmt(t.examRem)+'</div>'
+    badge.textContent=(t.examRem<0?'ÜBER ':'')+fmt(t.examRem)+' ⏱';
+    var ts=t.examRem<0?' style="color:#c0392b"':'';
+    html='<div class="timer-display"><div class="timer-time"'+ts+'>'+(t.examRem<0?'+':'')+fmt(t.examRem)+'</div>'
       +'<div class="timer-label">'+(t.examRem<0?'<span class="timer-over">Prüfung überzogen!</span>':'Prüfung läuft...')+'</div></div>'
       +'<div class="timer-buttons">'
       +'<button class="timer-btn btn-pause" data-action="exam_pause" data-sid="'+sid+'">Pause</button></div>'
-      // Exam form
       +examFormHtml(sid,t);
   }
-  // ===== STATE: exam paused =====
   else if(t.examState==='paused'){
-    var examP2=t.examRem>=0?Math.max(0,Math.min(1,1-(t.examRem/EXAM))):1;
-    prog.style.width=(examP2*100)+'%';
-    prog.style.backgroundColor=t.examRem<0?'rgba(231,76,60,0.35)':examColor(examP2);
+    var ep2=t.examRem>=0?Math.max(0,Math.min(1,1-(t.examRem/EXAM))):1;
+    prog.style.width=(ep2*100)+'%';
+    prog.style.backgroundColor=t.examRem<0?'rgba(231,76,60,0.35)':examColor(ep2);
     badge.className='timer-badge visible st-paused';
     badge.textContent=fmt(t.examRem)+' ⏸';
     html='<div class="timer-display"><div class="timer-time">'+fmt(t.examRem)+'</div><div class="timer-label">Prüfung pausiert</div></div>'
@@ -611,17 +673,15 @@ function render(sid){
       +'<button class="timer-btn btn-resume" data-action="exam_resume" data-sid="'+sid+'">Fortsetzen</button></div>'
       +examFormHtml(sid,t);
   }
-  // ===== STATE: done =====
   else if(t.examState==='done'){
     prog.style.width='100%'; prog.style.backgroundColor='rgba(76,175,80,0.35)';
     badge.className='timer-badge visible st-done';
     badge.textContent='Abgeschlossen ✓';
-    var zd=t.zeitDiff;
-    var zdText=''; var zdClass='';
-    if(zd!==null && zd!==undefined){
-      if(zd>0){ zdText=fmt(zd)+' früher fertig'; zdClass='under'; }
-      else if(zd<0){ zdText=fmt(zd)+' überzogen'; zdClass='over'; }
-      else { zdText='Genau in der Zeit'; zdClass='under'; }
+    var zd=t.zeitDiff, zdText='', zdClass='';
+    if(zd!==null&&zd!==undefined){
+      if(zd>0){zdText=fmt(zd)+' früher fertig';zdClass='under';}
+      else if(zd<0){zdText=fmt(Math.abs(zd))+' überzogen';zdClass='over';}
+      else{zdText='Genau in der Zeit';zdClass='under';}
     }
     html='<div class="done-card"><h3 style="color:#4caf50">Prüfung abgeschlossen ✓</h3>'
       +(zdText?'<div class="zeit-info '+zdClass+'">'+zdText+'</div>':'')
@@ -633,16 +693,6 @@ function render(sid){
   }
 
   ec.innerHTML=html;
-
-  // Bind select/textarea values for exam form
-  if(t.examState==='running'||t.examState==='paused'){
-    var ns=document.getElementById('note-'+sid);
-    var ts=document.getElementById('themen-'+sid);
-    var ks=document.getElementById('komm-'+sid);
-    if(ns&&t.note) ns.value=t.note;
-    if(ts&&t.themen) ts.value=t.themen;
-    if(ks&&t.komm) ks.value=t.komm;
-  }
 }
 
 function examFormHtml(sid,t){
@@ -664,19 +714,40 @@ function examFormHtml(sid,t){
 function prepTick(sid){
   var t=g(sid); if(t.state!=='running') return;
   t.rem=Math.max(0,t.rem-1);
-  if(t.rem<=0){t.state='prep_done'; if(t.iid){clearInterval(t.iid);t.iid=null;} api(sid,'prep_done');}
-  render(sid);
+  if(t.rem<=0){
+    t.state='prep_done';
+    if(t.iid){clearInterval(t.iid);t.iid=null;}
+    api(sid,'prep_done');
+    render(sid); // State-Wechsel -> fullRender
+  } else {
+    tickUpdate(sid); // Nur Timer-Text + Balken
+  }
 }
 function examTick(sid){
   var t=g(sid); if(t.examState!=='running') return;
-  t.examRem=t.examRem-1; // kann negativ werden
-  render(sid);
+  t.examRem=t.examRem-1;
+  tickUpdate(sid); // NUR Timer-Text + Balken, Formular bleibt unangetastet!
 }
 
 function api(sid,action,body){
   var o={method:'POST',headers:{'Content-Type':'application/json'}};
   if(body)o.body=JSON.stringify(body);
   fetch('/api/timer/'+sid+'/'+action,o).catch(function(e){console.warn('Sync:',e);});
+}
+
+// ===== SORTIERUNG: Fertige Schüler nach unten =====
+function sortCards(){
+  var liste=document.querySelector('.schueler-liste');
+  if(!liste) return;
+  var cards=Array.from(liste.querySelectorAll('.schueler-item'));
+  cards.sort(function(a,b){
+    var sa=g(a.getAttribute('data-sid'));
+    var sb=g(b.getAttribute('data-sid'));
+    var aDone=(sa.examState==='done')?1:0;
+    var bDone=(sb.examState==='done')?1:0;
+    return aDone-bDone; // done=1 geht nach unten
+  });
+  cards.forEach(function(c){liste.appendChild(c);});
 }
 
 // ===== CONFIRM RESET =====
@@ -692,6 +763,7 @@ document.getElementById('confirmYes').addEventListener('click',function(){
     t.note=null; t.themen=null; t.komm=''; t.zeitDiff=null;
     render(pendingResetSid);
     api(pendingResetSid,'reset');
+    sortCards();
   }
   overlay.classList.remove('active');
   pendingResetSid=null;
@@ -727,7 +799,6 @@ document.addEventListener('click',function(e){
       render(sid); api(sid,'resume');
     }
     else if(action==='reset'){
-      // Name aus Card holen
       var card=document.getElementById('card-'+sid);
       var nameEl=card?card.querySelector('.schueler-name'):null;
       var sname=nameEl?nameEl.textContent:'diesen Schüler';
@@ -739,8 +810,8 @@ document.addEventListener('click',function(e){
       t.examState='running'; t.examRem=EXAM;
       if(t.eiid)clearInterval(t.eiid);
       t.eiid=setInterval(function(){examTick(sid);},1000);
-      card=document.getElementById('card-'+sid);
-      if(card)card.classList.add('expanded');
+      var card2=document.getElementById('card-'+sid);
+      if(card2)card2.classList.add('expanded');
       render(sid); api(sid,'exam_start');
     }
     else if(action==='exam_pause'){
@@ -753,7 +824,6 @@ document.addEventListener('click',function(e){
       render(sid); api(sid,'exam_resume');
     }
     else if(action==='exam_finish'){
-      // Validate
       var noteEl=document.getElementById('note-'+sid);
       var themenEl=document.getElementById('themen-'+sid);
       var kommEl=document.getElementById('komm-'+sid);
@@ -766,16 +836,16 @@ document.addEventListener('click',function(e){
       }
       if(t.eiid){clearInterval(t.eiid);t.eiid=null;}
       t.examState='done'; t.note=parseInt(note); t.themen=parseInt(themen); t.komm=komm;
-      t.zeitDiff=t.examRem; // positiv = früher fertig, negativ = überzogen
+      t.zeitDiff=t.examRem;
       render(sid);
       api(sid,'exam_finish',{note:t.note,themenpool:t.themen,kommentar:komm,zeit_differenz:t.zeitDiff});
+      sortCards(); // Fertige nach unten
     }
     return;
   }
 
-  // Form-Felder: Werte merken
-  var sel=e.target.closest('select[data-field],textarea[data-field]');
-  if(sel){e.stopPropagation();return;}
+  // Form-Felder nicht propagieren
+  if(e.target.closest('.exam-form')){e.stopPropagation();return;}
 
   // Card toggle
   var card=e.target.closest('.schueler-item');
@@ -801,6 +871,11 @@ document.addEventListener('input',function(e){
     t.komm=el.value;
   }
 });
+
+// Prevent card toggle when clicking inside form
+document.addEventListener('mousedown',function(e){
+  if(e.target.closest('.exam-form'))e.stopPropagation();
+},true);
 
 // ===== INIT =====
 document.querySelectorAll('.schueler-item').forEach(function(c){
@@ -830,6 +905,7 @@ fetch('/api/timers/${zweig}')
       }
       render(sid);
     }
+    sortCards(); // Nach Laden sortieren
   }).catch(function(e){console.warn('Load:',e);});
 
 })();
