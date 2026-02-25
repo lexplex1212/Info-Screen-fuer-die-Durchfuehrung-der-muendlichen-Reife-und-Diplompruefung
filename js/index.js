@@ -26,41 +26,39 @@ const db = new sqlite3.Database(dbPath, (err) => {
         console.error('Fehler beim Öffnen der DB:', err.message);
     } else {
         console.log('Verbindung zur Datenbank termine.db erfolgreich hergestellt');
+        // Tabelle erstellen (falls komplett neu)
         db.run(`CREATE TABLE IF NOT EXISTS timer_status (
                                                             id INTEGER PRIMARY KEY AUTOINCREMENT,
                                                             schueler_id TEXT UNIQUE NOT NULL,
                                                             started_at INTEGER,
                                                             paused_at INTEGER,
                                                             remaining_seconds REAL NOT NULL DEFAULT ${VORBEREITUNGS_TIMER},
-                                                            state TEXT NOT NULL DEFAULT 'idle',
-                                                            exam_started_at INTEGER,
-                                                            exam_remaining REAL NOT NULL DEFAULT ${PRUEFUNGS_TIMER},
-                                                            exam_state TEXT NOT NULL DEFAULT 'idle',
-                                                            note INTEGER,
-                                                            themenpool INTEGER,
-                                                            kommentar TEXT,
-                                                            zeit_differenz REAL
-                )`, (err) => {
-            if (err) {
-                // Tabelle existiert schon, versuche fehlende Spalten hinzuzufügen
-                const cols = [
-                    ['exam_started_at', 'INTEGER'],
-                    ['exam_remaining', `REAL NOT NULL DEFAULT ${PRUEFUNGS_TIMER}`],
-                    ['exam_state', "TEXT NOT NULL DEFAULT 'idle'"],
-                    ['note', 'INTEGER'],
-                    ['themenpool', 'INTEGER'],
-                    ['kommentar', 'TEXT'],
-                    ['zeit_differenz', 'REAL']
-                ];
-                cols.forEach(([col, type]) => {
-                    db.run(`ALTER TABLE timer_status ADD COLUMN ${col} ${type}`, () => {});
+                                                            state TEXT NOT NULL DEFAULT 'idle'
+                )`, () => {
+            // IMMER versuchen die neuen Spalten hinzuzufügen
+            // Falls sie schon existieren, ignoriert SQLite den Fehler
+            const newCols = [
+                ['exam_started_at', 'INTEGER'],
+                ['exam_remaining', 'REAL DEFAULT ' + PRUEFUNGS_TIMER],
+                ['exam_state', "TEXT DEFAULT 'idle'"],
+                ['note', 'INTEGER'],
+                ['themenpool', 'INTEGER'],
+                ['kommentar', 'TEXT'],
+                ['zeit_differenz', 'REAL']
+            ];
+            let done = 0;
+            newCols.forEach(([col, type]) => {
+                db.run(`ALTER TABLE timer_status ADD COLUMN ${col} ${type}`, (err) => {
+                    if (err && !err.message.includes('duplicate column')) {
+                        console.error('Spalte ' + col + ':', err.message);
+                    }
+                    done++;
+                    if (done === newCols.length) {
+                        console.log('timer_status Tabelle bereit (alle Spalten geprüft)');
+                        initAlleTimer();
+                    }
                 });
-                console.log('timer_status Tabelle aktualisiert');
-            } else {
-                console.log('timer_status Tabelle bereit');
-            }
-            // Nach Tabellen-Setup: Alle Schüler-Timer initialisieren
-            initAlleTimer();
+            });
         });
     }
 });
