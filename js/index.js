@@ -124,21 +124,28 @@ function getKlassenStrukturAusDB() {
     });
 }
 
-// Funktion zum Laden der Schüler für eine bestimmte Klasse
-function getSchuelerFuerKlasse(klassenname) {
+// NEU: Funktion zum Laden aller Schüler eines Zweigs
+function getSchuelerFuerZweig(zweig) {
     return new Promise((resolve, reject) => {
+        const klassenListe = klassen[zweig] || [];
+
+        if (klassenListe.length === 0) {
+            return resolve([]);
+        }
+
+        const placeholders = klassenListe.map(() => '?').join(',');
         const query = `
-            SELECT * FROM termine
-            WHERE klasse = ?
-            ORDER BY nachname, vorname
+            SELECT * FROM termine 
+            WHERE klasse IN (${placeholders})
+            ORDER BY klasse, nachname, vorname
         `;
 
-        db.all(query, [klassenname], (err, rows) => {
+        db.all(query, klassenListe, (err, rows) => {
             if (err) {
                 console.error('Fehler beim Laden der Schüler:', err.message);
                 return resolve([]);
             }
-            console.log(`${rows.length} Schüler gefunden für Klasse ${klassenname}`);
+            console.log(`${rows.length} Schüler gefunden für Zweig ${zweig}`);
             resolve(rows);
         });
     });
@@ -413,18 +420,11 @@ app.get('/zweig/:zweig', requireAuth, async (req, res) => {
     const zweig = req.params.zweig.toLowerCase();
 
     try {
-        const struktur = await getKlassenStrukturAusDB();
-        let klassenListe;
-
-        if (struktur && struktur[zweig]) {
-            klassenListe = Object.keys(struktur[zweig]);
-        } else {
-            klassenListe = klassen[zweig] || [];
-        }
-
-        if (klassenListe.length === 0) {
+        if (!klassen[zweig]) {
             return res.redirect('/home');
         }
+
+        const schueler = await getSchuelerFuerZweig(zweig);
 
         const farbe = zweigFarben[zweig];
         const name = zweigNamen[zweig];
@@ -436,74 +436,14 @@ app.get('/zweig/:zweig', requireAuth, async (req, res) => {
     <head>
       <meta charset="UTF-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>${name} - Klassenauswahl</title>
-      <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: Arial, sans-serif; background: linear-gradient(135deg, #07175e 0%, #07175e 100%); min-height: 100vh; padding: 40px 20px; }
-        .container { background: white; border-radius: 20px; padding: 50px; box-shadow: 0 20px 60px rgba(0,0,0,0.3); max-width: 800px; margin: 0 auto; }
-        .back-button { display: inline-block; margin-bottom: 30px; padding: 10px 20px; background-color: #666; color: white; text-decoration: none; border-radius: 8px; transition: background-color 0.3s; }
-        .back-button:hover { background-color: #444; }
-        h1 { text-align: center; color: #333; margin-bottom: 20px; font-size: 2.5em; }
-        h2 { text-align: center; color: ${farbe}; margin-bottom: 40px; font-size: 2em; }
-        .klassen-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin-top: 30px; }
-        .klassen-button {
-          padding: 30px; font-size: 1.3em; font-weight: bold;
-          border: none; border-radius: 12px; cursor: pointer;
-          transition: all 0.3s ease; text-decoration: none;
-          display: flex; align-items: center; justify-content: center;
-          text-align: center; box-shadow: 0 5px 15px rgba(0,0,0,0.2);
-          background-color: ${farbe}; color: ${textFarbe};
-        }
-        .klassen-button:hover { transform: translateY(-5px); box-shadow: 0 10px 25px rgba(0,0,0,0.3); }
-      </style>
-    </head>
-    <body>
-      <div class="container">
-        <a href="/home" class="back-button">Zurück zur Zweigauswahl</a>
-        <h1>Klassen</h1>
-        <h2>${name}</h2>
-        <div class="klassen-grid">
-          ${klassenListe.map(klasse => `<a href="/klasse/${klasse}" class="klassen-button">${klasse}</a>`).join('')}
-        </div>
-      </div>
-    </body>
-    </html>
-  `);
-    } catch (err) {
-        console.error('Fehler beim Laden der Klassen:', err);
-        res.status(500).send('Fehler beim Laden der Daten');
-    }
-});
-
-app.get('/klasse/:klasse', requireAuth, async (req, res) => {
-    const klasse = req.params.klasse.toUpperCase();
-
-    try {
-        const zweig = zweigZuordnung[klasse];
-
-        if (!zweig) {
-            return res.redirect('/home');
-        }
-
-        const schueler = await getSchuelerFuerKlasse(klasse);
-
-        const farbe = zweigFarben[zweig];
-        const textFarbe = (zweig === 'elektrotechnik' || zweig === 'wirtschaft') ? '#333' : 'white';
-
-        res.send(`
-    <!DOCTYPE html>
-    <html lang="de">
-    <head>
-      <meta charset="UTF-8">
-      <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>Klasse ${klasse}</title>
+      <title>${name} - Schülerübersicht</title>
       <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { font-family: Arial, sans-serif; background: linear-gradient(135deg, #07175e 0%, #07175e 100%); min-height: 100vh; padding: 40px 20px; }
         .container { background: white; border-radius: 20px; padding: 60px; box-shadow: 0 20px 60px rgba(0,0,0,0.3); max-width: 1000px; margin: 0 auto; }
         .back-button { display: inline-block; margin-bottom: 30px; padding: 12px 25px; background-color: #666; color: white; text-decoration: none; border-radius: 8px; transition: background-color 0.3s; }
         .back-button:hover { background-color: #444; }
-        .klasse-badge { display: inline-block; padding: 30px 60px; background-color: ${farbe}; color: ${textFarbe}; font-size: 3em; font-weight: bold; border-radius: 15px; margin: 30px 0; box-shadow: 0 10px 30px rgba(0,0,0,0.2); }
+        .zweig-badge { display: inline-block; padding: 30px 60px; background-color: ${farbe}; color: ${textFarbe}; font-size: 3em; font-weight: bold; border-radius: 15px; margin: 30px 0; box-shadow: 0 10px 30px rgba(0,0,0,0.2); }
         h1 { color: #333; font-size: 2em; margin-top: 20px; text-align: center; }
         p { color: #666; font-size: 1.2em; margin-top: 20px; text-align: center; }
         .schueler-liste { margin-top: 40px; }
@@ -525,11 +465,27 @@ app.get('/klasse/:klasse', requireAuth, async (req, res) => {
           justify-content: space-between;
           align-items: center;
           margin-bottom: 10px;
+          flex-wrap: wrap;
+          gap: 10px;
+        }
+        .schueler-name-container {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          flex-wrap: wrap;
         }
         .schueler-name { 
           font-weight: bold; 
           font-size: 1.3em; 
           color: #333; 
+        }
+        .klassen-badge {
+          background: ${farbe};
+          color: ${textFarbe};
+          padding: 4px 12px;
+          border-radius: 15px;
+          font-size: 0.8em;
+          font-weight: bold;
         }
         .schueler-datum {
           background: ${farbe};
@@ -558,10 +514,10 @@ app.get('/klasse/:klasse', requireAuth, async (req, res) => {
     </head>
     <body>
       <div class="container">
-        <a href="/zweig/${zweig}" class="back-button">Zurück zu ${zweigNamen[zweig]}</a>
+        <a href="/home" class="back-button">Zurück zur Zweigauswahl</a>
         <div style="text-align: center;">
-          <div class="klasse-badge">${klasse}</div>
-          <h1>Klasse ${klasse}</h1>
+          <div class="zweig-badge">${name}</div>
+          <h1>Zweig ${name}</h1>
           ${schueler.length > 0 ? `<p>${schueler.length} Schüler maturieren</p>` : '<p>Keine Schüler in der Datenbank gefunden.</p>'}
         </div>
         ${schueler.length > 0 ? `
@@ -569,7 +525,10 @@ app.get('/klasse/:klasse', requireAuth, async (req, res) => {
           ${schueler.map(s => `
             <div class="schueler-item">
               <div class="schueler-header">
-                <div class="schueler-name">${s.vorname || 'Vorname'} ${s.nachname || 'Nachname'}</div>
+                <div class="schueler-name-container">
+                  <div class="schueler-name">${s.vorname || 'Vorname'} ${s.nachname || 'Nachname'}</div>
+                  ${s.klasse ? `<span class="klassen-badge">${s.klasse}</span>` : ''}
+                </div>
                 ${s.datum ? `<div class="schueler-datum">${s.datum}</div>` : ''}
               </div>
               <div class="schueler-details">
