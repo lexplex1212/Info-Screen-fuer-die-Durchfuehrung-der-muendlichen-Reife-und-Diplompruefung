@@ -836,7 +836,7 @@ app.get('/zweig/:zweig', requireAuth, async (req, res) => {
     }
 });
 
-// ==================== HTTPS Server ====================
+// ==================== HTTPS Server ===================
 
 const httpsOptions = {
     key: fs.readFileSync('./cert/key.pem'),
