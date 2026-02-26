@@ -503,7 +503,20 @@ p.subtitle{color:#666;font-size:1.2em;margin-top:20px;text-align:center}
 .cbtn-yes{background:#f44336;color:#fff}
 .cbtn-no{background:#9e9e9e;color:#fff}
 
-@media(max-width:600px){.container{padding:30px 15px}.zweig-badge{padding:20px 30px;font-size:2em}.timer-time{font-size:2em}.timer-btn{padding:10px 18px;font-size:.95em}.form-row{flex-direction:column}.form-row label{min-width:auto}}
+/* ===== NÄCHSTE PRÜFUNG WIDGET ===== */
+.next-exam-widget{position:fixed;top:20px;right:20px;width:320px;background:#fff;border-radius:14px;box-shadow:0 8px 30px rgba(0,0,0,.25);z-index:500;overflow:hidden}
+.new-header{padding:14px 18px;font-weight:700;font-size:1.1em;color:#fff;background:#333;text-align:center}
+#nextExamContent{padding:16px}
+.new-loading{text-align:center;color:#999;padding:10px}
+.nex-countdown{font-size:2.2em;font-weight:700;text-align:center;margin:8px 0;font-variant-numeric:tabular-nums;letter-spacing:2px}
+.nex-countdown.soon{color:#e74c3c}
+.nex-countdown.normal{color:#333}
+.nex-name{font-size:1.15em;font-weight:700;color:#222;text-align:center;margin-bottom:4px}
+.nex-badge{display:inline-block;padding:3px 10px;border-radius:12px;font-size:.8em;font-weight:700}
+.nex-details{text-align:center;color:#555;font-size:.9em;margin-top:8px;line-height:1.7}
+.nex-done{text-align:center;color:#4caf50;font-weight:700;font-size:1.1em;padding:15px 0}
+
+@media(max-width:600px){.container{padding:30px 15px}.zweig-badge{padding:20px 30px;font-size:2em}.timer-time{font-size:2em}.timer-btn{padding:10px 18px;font-size:.95em}.form-row{flex-direction:column}.form-row label{min-width:auto}.next-exam-widget{position:relative;top:auto;right:auto;width:100%;margin:0 auto 20px auto;border-radius:12px}}
 </style>
 </head>
 <body>
@@ -516,6 +529,29 @@ p.subtitle{color:#666;font-size:1.2em;margin-top:20px;text-align:center}
   </div>
   ${schueler.length > 0 ? '<div class="schueler-liste">' + cardsHtml + '</div>' : ''}
 </div>
+
+<!-- Nächste Prüfung Widget -->
+<div class="next-exam-widget" id="nextExamWidget">
+  <div class="new-header">Nächste Prüfung</div>
+  <div id="nextExamContent"><div class="new-loading">Lade...</div></div>
+</div>
+
+<!-- Schüler-Daten für JS -->
+<script>var SCHUELER_DATA = ${JSON.stringify(schueler.map((s,i) => ({
+            sid: zweig + '_' + (s.rowid || i),
+            vorname: s.vorname || '',
+            nachname: s.nachname || '',
+            klasse: s.klasse || '',
+            fach: s.fach || '',
+            pruefer: s.pruefer || '',
+            datum: s.datum || '',
+            exam_start: s.exam_start || '',
+            exam_end: s.exam_end || '',
+            zweig: zweig
+        })))};
+var ZWEIG_FARBE = '${farbe}';
+var ZWEIG_TEXT_FARBE = '${tf}';
+</script>
 
 <!-- Reset Confirm -->
 <div class="confirm-overlay" id="confirmOverlay">
@@ -905,6 +941,118 @@ fetch('/api/timers/${zweig}')
   }).catch(function(e){console.warn('Load:',e);});
 
 })();
+
+// ===== NÄCHSTE PRÜFUNG WIDGET =====
+(function(){
+  var widget=document.getElementById('nextExamContent');
+  if(!widget||typeof SCHUELER_DATA==='undefined') return;
+
+  // Datum+Uhrzeit parsen: datum="Fr, 26.09.2025", exam_start="09:48"
+  function parseExamTime(s){
+    if(!s.datum||!s.exam_start) return null;
+    // Datum: "Fr, 26.09.2025" oder "26.09.2025"
+    var dm=s.datum.match(/(\\d{2})\\.(\\d{2})\\.(\\d{4})/);
+    if(!dm) return null;
+    var day=parseInt(dm[1]),mon=parseInt(dm[2])-1,year=parseInt(dm[3]);
+    // Uhrzeit: "09:48"
+    var tm=s.exam_start.match(/(\\d{1,2}):(\\d{2})/);
+    if(!tm) return null;
+    var h=parseInt(tm[1]),m=parseInt(tm[2]);
+    return new Date(year,mon,day,h,m,0);
+  }
+
+  function fmtCountdown(ms){
+    var totalSec=Math.floor(Math.abs(ms)/1000);
+    var h=Math.floor(totalSec/3600);
+    var m=Math.floor((totalSec%3600)/60);
+    var sec=totalSec%60;
+    if(h>0) return(ms<0?'-':'')+h+'h '+(m<10?'0':'')+m+':'+(sec<10?'0':'')+sec;
+    return(ms<0?'-':'')+(m<10?'0':'')+m+':'+(sec<10?'0':'')+sec;
+  }
+
+  function updateWidget(){
+    var now=new Date();
+    var next=null;
+    var nextDiff=Infinity;
+
+    SCHUELER_DATA.forEach(function(s){
+      // Prüfe ob Schüler schon fertig ist
+      var t=window._timerGet?window._timerGet(s.sid):null;
+      if(t&&t.examState==='done') return; // schon abgeschlossen
+
+      var examTime=parseExamTime(s);
+      if(!examTime) return;
+
+      var diff=examTime.getTime()-now.getTime();
+      // Zeige auch laufende Prüfungen (diff kann negativ sein, aber nicht älter als 1h)
+      if(diff>-3600000 && diff<nextDiff){
+        nextDiff=diff;
+        next={schueler:s,time:examTime,diff:diff};
+      }
+    });
+
+    if(!next){
+      widget.innerHTML='<div class="nex-done">Keine weiteren Prüfungen heute</div>';
+      return;
+    }
+
+    var s=next.schueler;
+    var diff=next.diff;
+    var countdownClass=diff<600000?'soon':'normal'; // unter 10 min = rot
+    var countdownText;
+    var label;
+
+    if(diff>0){
+      countdownText=fmtCountdown(diff);
+      label='beginnt in';
+    } else {
+      countdownText='JETZT';
+      countdownClass='soon';
+      label='läuft gerade';
+    }
+
+    widget.innerHTML=
+      '<div class="nex-name">'+s.vorname+' '+s.nachname+'</div>'
+      +'<div style="text-align:center;margin:4px 0">'
+      +'<span class="nex-badge" style="background:'+ZWEIG_FARBE+';color:'+ZWEIG_TEXT_FARBE+'">'+s.klasse+'</span>'
+      +(s.fach?'<span style="color:#666;font-size:.9em;margin-left:6px">'+s.fach+'</span>':'')
+      +'</div>'
+      +'<div class="nex-countdown '+countdownClass+'">'+countdownText+'</div>'
+      +'<div class="nex-details">'+label
+      +(diff>0?' · '+s.exam_start+' Uhr':'')
+      +(s.pruefer?' · Prüfer: '+s.pruefer:'')
+      +'</div>';
+  }
+
+  // Timer-State Zugriff für Widget
+  window._timerGet=function(sid){
+    // Greift auf den Timer-State zu (aus dem Hauptscript)
+    // T ist im anderen IIFE, daher brauchen wir einen Accessor
+    return null; // Fallback
+  };
+
+  updateWidget();
+  setInterval(updateWidget,1000);
+})();
+
+// Accessor für Timer-State (verbindet beide IIFEs)
+(function(){
+  var origGet=window._timerGet;
+  // Wir müssen den T-Zugriff über die sortCards/render Funktionen ermöglichen
+  // Da T im IIFE eingeschlossen ist, exponieren wir einen Getter
+})();
+</script>
+
+<!-- Timer-State Accessor Patch -->
+<script>
+// Das erste IIFE hat T nicht exponiert, daher patchen wir _timerGet
+// über die data-Attribute der Cards
+window._timerGet=function(sid){
+  var badge=document.getElementById('badge-'+sid);
+  if(!badge) return {examState:'idle'};
+  if(badge.classList.contains('st-done')) return {examState:'done'};
+  return {examState:'active'};
+};
 </script>
 </body></html>`);
     } catch(err){ console.error(err); res.status(500).send('Fehler'); }
