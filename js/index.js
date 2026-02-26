@@ -504,19 +504,30 @@ p.subtitle{color:#666;font-size:1.2em;margin-top:20px;text-align:center}
 .cbtn-no{background:#9e9e9e;color:#fff}
 
 /* ===== NÄCHSTE PRÜFUNG WIDGET ===== */
-.next-exam-widget{position:fixed;top:20px;right:20px;width:320px;background:#fff;border-radius:14px;box-shadow:0 8px 30px rgba(0,0,0,.25);z-index:500;overflow:hidden}
-.new-header{padding:14px 18px;font-weight:700;font-size:1.1em;color:#fff;background:#333;text-align:center}
+.next-exam-widget{position:fixed;top:20px;right:20px;width:320px;background:#fff;border-radius:14px;box-shadow:0 8px 30px rgba(0,0,0,.25);z-index:500;overflow:hidden;user-select:none}
+.new-header{padding:12px 18px;font-weight:700;font-size:1.05em;color:#fff;background:#333;display:flex;justify-content:space-between;align-items:center;cursor:grab}
+.new-header:active{cursor:grabbing}
+.new-header-text{pointer-events:none}
+.widget-toggle{background:none;border:2px solid rgba(255,255,255,.5);color:#fff;width:30px;height:30px;border-radius:50%;font-size:1.2em;cursor:pointer;display:flex;align-items:center;justify-content:center;line-height:1;transition:all .2s}
+.widget-toggle:hover{background:rgba(255,255,255,.2);border-color:#fff}
+.widget-body{transition:max-height .3s ease,opacity .3s ease;max-height:400px;opacity:1;overflow:hidden}
+.widget-body.collapsed{max-height:0;opacity:0}
 #nextExamContent{padding:16px}
 .new-loading{text-align:center;color:#999;padding:10px}
 .nex-countdown{font-size:2.2em;font-weight:700;text-align:center;margin:8px 0;font-variant-numeric:tabular-nums;letter-spacing:2px}
 .nex-countdown.soon{color:#e74c3c}
 .nex-countdown.normal{color:#333}
+.nex-countdown.active{color:#e67e22}
 .nex-name{font-size:1.15em;font-weight:700;color:#222;text-align:center;margin-bottom:4px}
 .nex-badge{display:inline-block;padding:3px 10px;border-radius:12px;font-size:.8em;font-weight:700}
 .nex-details{text-align:center;color:#555;font-size:.9em;margin-top:8px;line-height:1.7}
 .nex-done{text-align:center;color:#4caf50;font-weight:700;font-size:1.1em;padding:15px 0}
+.nex-status{text-align:center;margin-top:6px;font-size:.85em;padding:4px 10px;border-radius:8px;display:inline-block}
+.nex-status.waiting{background:#fff3cd;color:#856404}
+.nex-status.prep-active{background:#ffe0cc;color:#c0392b}
+.nex-status.exam-active{background:#d4edda;color:#155724}
 
-@media(max-width:600px){.container{padding:30px 15px}.zweig-badge{padding:20px 30px;font-size:2em}.timer-time{font-size:2em}.timer-btn{padding:10px 18px;font-size:.95em}.form-row{flex-direction:column}.form-row label{min-width:auto}.next-exam-widget{position:relative;top:auto;right:auto;width:100%;margin:0 auto 20px auto;border-radius:12px}}
+@media(max-width:600px){.container{padding:30px 15px}.zweig-badge{padding:20px 30px;font-size:2em}.timer-time{font-size:2em}.timer-btn{padding:10px 18px;font-size:.95em}.form-row{flex-direction:column}.form-row label{min-width:auto}.next-exam-widget{position:relative;top:auto!important;right:auto!important;left:auto!important;width:100%;margin:0 auto 20px auto;border-radius:12px;cursor:default}}
 </style>
 </head>
 <body>
@@ -530,10 +541,15 @@ p.subtitle{color:#666;font-size:1.2em;margin-top:20px;text-align:center}
   ${schueler.length > 0 ? '<div class="schueler-liste">' + cardsHtml + '</div>' : ''}
 </div>
 
-<!-- Nächste Prüfung Widget -->
+<!-- Nächste Prüfung Widget (draggable + collapsible) -->
 <div class="next-exam-widget" id="nextExamWidget">
-  <div class="new-header">Nächste Prüfung</div>
-  <div id="nextExamContent"><div class="new-loading">Lade...</div></div>
+  <div class="new-header" id="widgetHeader">
+    <span class="new-header-text">Nächste Vorbereitung</span>
+    <button class="widget-toggle" id="widgetToggle" title="Einklappen">−</button>
+  </div>
+  <div class="widget-body" id="widgetBody">
+    <div id="nextExamContent"><div class="new-loading">Lade...</div></div>
+  </div>
 </div>
 
 <!-- Schüler-Daten für JS -->
@@ -545,6 +561,7 @@ p.subtitle{color:#666;font-size:1.2em;margin-top:20px;text-align:center}
             fach: s.fach || '',
             pruefer: s.pruefer || '',
             datum: s.datum || '',
+            prep_start: s.prep_start || s.rep_start || '',
             exam_start: s.exam_start || '',
             exam_end: s.exam_end || '',
             zweig: zweig
@@ -944,115 +961,188 @@ fetch('/api/timers/${zweig}')
 
 // ===== NÄCHSTE PRÜFUNG WIDGET =====
 (function(){
-  var widget=document.getElementById('nextExamContent');
-  if(!widget||typeof SCHUELER_DATA==='undefined') return;
+  var widget=document.getElementById('nextExamWidget');
+  var content=document.getElementById('nextExamContent');
+  var header=document.getElementById('widgetHeader');
+  var body=document.getElementById('widgetBody');
+  var toggleBtn=document.getElementById('widgetToggle');
+  if(!widget||!content||typeof SCHUELER_DATA==='undefined') return;
 
-  // Datum+Uhrzeit parsen: datum="Fr, 26.09.2025", exam_start="09:48"
-  function parseExamTime(s){
-    if(!s.datum||!s.exam_start) return null;
-    // Datum: "Fr, 26.09.2025" oder "26.09.2025"
-    var dm=s.datum.match(/(\\d{2})\\.(\\d{2})\\.(\\d{4})/);
+  // ===== EINKLAPPEN =====
+  var isCollapsed=false;
+  toggleBtn.addEventListener('click',function(e){
+    e.stopPropagation();
+    isCollapsed=!isCollapsed;
+    body.classList.toggle('collapsed',isCollapsed);
+    toggleBtn.textContent=isCollapsed?'+':'−';
+    toggleBtn.title=isCollapsed?'Aufklappen':'Einklappen';
+  });
+
+  // ===== DRAG & DROP =====
+  var isDragging=false, dragOffX=0, dragOffY=0;
+  header.addEventListener('mousedown',function(e){
+    if(e.target===toggleBtn) return;
+    isDragging=true;
+    var rect=widget.getBoundingClientRect();
+    dragOffX=e.clientX-rect.left;
+    dragOffY=e.clientY-rect.top;
+    widget.style.transition='none';
+    e.preventDefault();
+  });
+  document.addEventListener('mousemove',function(e){
+    if(!isDragging) return;
+    var x=e.clientX-dragOffX;
+    var y=e.clientY-dragOffY;
+    // Grenzen
+    x=Math.max(0,Math.min(window.innerWidth-widget.offsetWidth,x));
+    y=Math.max(0,Math.min(window.innerHeight-widget.offsetHeight,y));
+    widget.style.left=x+'px';
+    widget.style.top=y+'px';
+    widget.style.right='auto';
+  });
+  document.addEventListener('mouseup',function(){
+    if(isDragging){isDragging=false;widget.style.transition='';}
+  });
+
+  // Touch support
+  header.addEventListener('touchstart',function(e){
+    if(e.target===toggleBtn) return;
+    isDragging=true;
+    var touch=e.touches[0];
+    var rect=widget.getBoundingClientRect();
+    dragOffX=touch.clientX-rect.left;
+    dragOffY=touch.clientY-rect.top;
+    widget.style.transition='none';
+  },{passive:true});
+  document.addEventListener('touchmove',function(e){
+    if(!isDragging) return;
+    var touch=e.touches[0];
+    var x=touch.clientX-dragOffX;
+    var y=touch.clientY-dragOffY;
+    x=Math.max(0,Math.min(window.innerWidth-widget.offsetWidth,x));
+    y=Math.max(0,Math.min(window.innerHeight-widget.offsetHeight,y));
+    widget.style.left=x+'px';
+    widget.style.top=y+'px';
+    widget.style.right='auto';
+  },{passive:true});
+  document.addEventListener('touchend',function(){
+    if(isDragging){isDragging=false;widget.style.transition='';}
+  });
+
+  // ===== ZEIT PARSEN =====
+  // Datum: "Fr, 26.09.2025" oder "26.09.2025", Zeit: "09:28"
+  function parseDateTime(datum,zeit){
+    if(!datum||!zeit) return null;
+    var dm=datum.match(/(\\d{2})\\.(\\d{2})\\.(\\d{4})/);
     if(!dm) return null;
-    var day=parseInt(dm[1]),mon=parseInt(dm[2])-1,year=parseInt(dm[3]);
-    // Uhrzeit: "09:48"
-    var tm=s.exam_start.match(/(\\d{1,2}):(\\d{2})/);
+    var tm=zeit.match(/(\\d{1,2}):(\\d{2})/);
     if(!tm) return null;
-    var h=parseInt(tm[1]),m=parseInt(tm[2]);
-    return new Date(year,mon,day,h,m,0);
+    return new Date(parseInt(dm[3]),parseInt(dm[2])-1,parseInt(dm[1]),parseInt(tm[1]),parseInt(tm[2]),0);
   }
 
-  function fmtCountdown(ms){
-    var totalSec=Math.floor(Math.abs(ms)/1000);
-    var h=Math.floor(totalSec/3600);
-    var m=Math.floor((totalSec%3600)/60);
-    var sec=totalSec%60;
-    if(h>0) return(ms<0?'-':'')+h+'h '+(m<10?'0':'')+m+':'+(sec<10?'0':'')+sec;
-    return(ms<0?'-':'')+(m<10?'0':'')+m+':'+(sec<10?'0':'')+sec;
+  function fmtCD(ms){
+    var neg=ms<0; ms=Math.abs(ms);
+    var sec=Math.floor(ms/1000);
+    var h=Math.floor(sec/3600);
+    var m=Math.floor((sec%3600)/60);
+    var s=sec%60;
+    var str='';
+    if(h>0) str+=h+'h ';
+    str+=(m<10?'0':'')+m+':'+(s<10?'0':'')+s;
+    return(neg?'-':'')+str;
   }
 
+  // ===== WIDGET UPDATE =====
   function updateWidget(){
+    if(isCollapsed) return; // Nicht rendern wenn eingeklappt
+
     var now=new Date();
-    var next=null;
-    var nextDiff=Infinity;
+    var best=null;
+    var bestDiff=Infinity;
 
     SCHUELER_DATA.forEach(function(s){
-      // Prüfe ob Schüler schon fertig ist
-      var t=window._timerGet?window._timerGet(s.sid):null;
-      if(t&&t.examState==='done') return; // schon abgeschlossen
+      // Prüfe Status über Badge-Klasse
+      var badge=document.getElementById('badge-'+s.sid);
+      if(!badge) return;
+      var cl=badge.className||'';
+      // Überspringe: fertig, Vorbereitung läuft/pausiert/fertig, Prüfung läuft
+      if(cl.indexOf('st-done')!==-1) return;      // Prüfung abgeschlossen
+      if(cl.indexOf('st-prep')!==-1) return;       // Vorbereitung läuft
+      if(cl.indexOf('st-paused')!==-1) return;     // Timer pausiert
+      if(cl.indexOf('st-prep-done')!==-1) return;  // Vorbereitung fertig
+      if(cl.indexOf('st-exam')!==-1) return;       // Prüfung läuft
 
-      var examTime=parseExamTime(s);
-      if(!examTime) return;
+      // Vorbereitung-Startzeit parsen
+      var prepTime=parseDateTime(s.datum,s.prep_start);
+      if(!prepTime) return;
 
-      var diff=examTime.getTime()-now.getTime();
-      // Zeige auch laufende Prüfungen (diff kann negativ sein, aber nicht älter als 1h)
-      if(diff>-3600000 && diff<nextDiff){
-        nextDiff=diff;
-        next={schueler:s,time:examTime,diff:diff};
+      var diff=prepTime.getTime()-now.getTime();
+
+      // Zeige Einträge die max 2h in der Vergangenheit und in der Zukunft liegen
+      if(diff>-7200000 && diff<bestDiff){
+        bestDiff=diff;
+        best={s:s,prepTime:prepTime,diff:diff};
       }
     });
 
-    if(!next){
-      widget.innerHTML='<div class="nex-done">Keine weiteren Prüfungen heute</div>';
+    if(!best){
+      content.innerHTML='<div class="nex-done">Keine weiteren Prüfungen</div>';
       return;
     }
 
-    var s=next.schueler;
-    var diff=next.diff;
-    var countdownClass=diff<600000?'soon':'normal'; // unter 10 min = rot
-    var countdownText;
-    var label;
+    var s=best.s;
+    var diff=best.diff;
+    var cdClass,cdText,label,statusHtml;
 
     if(diff>0){
-      countdownText=fmtCountdown(diff);
-      label='beginnt in';
+      // Vorbereitung noch nicht gestartet
+      cdText=fmtCD(diff);
+      cdClass=diff<600000?'soon':'normal'; // <10min = rot
+      label='Vorbereitung beginnt in';
+      statusHtml='<div style="text-align:center"><span class="nex-status waiting">⏳ Wartet</span></div>';
     } else {
-      countdownText='JETZT';
-      countdownClass='soon';
-      label='läuft gerade';
+      // Vorbereitung sollte schon laufen oder Prüfung läuft
+      var examTime=parseDateTime(s.datum,s.exam_start);
+      var examDiff=examTime?(examTime.getTime()-now.getTime()):0;
+
+      if(examTime&&examDiff>0){
+        // Zwischen Vorbereitung und Prüfung
+        cdText=fmtCD(examDiff);
+        cdClass='active';
+        label='Prüfung beginnt in';
+        statusHtml='<div style="text-align:center"><span class="nex-status prep-active">📝 In Vorbereitung</span></div>';
+      } else if(examTime&&examDiff>-3600000){
+        // Prüfung läuft gerade
+        cdText='JETZT';
+        cdClass='soon';
+        label='Prüfung läuft';
+        statusHtml='<div style="text-align:center"><span class="nex-status exam-active">🎯 Prüfung aktiv</span></div>';
+      } else {
+        cdText='—';
+        cdClass='normal';
+        label='';
+        statusHtml='';
+      }
     }
 
-    widget.innerHTML=
+    content.innerHTML=
       '<div class="nex-name">'+s.vorname+' '+s.nachname+'</div>'
       +'<div style="text-align:center;margin:4px 0">'
       +'<span class="nex-badge" style="background:'+ZWEIG_FARBE+';color:'+ZWEIG_TEXT_FARBE+'">'+s.klasse+'</span>'
-      +(s.fach?'<span style="color:#666;font-size:.9em;margin-left:6px">'+s.fach+'</span>':'')
+      +(s.fach?' <span style="color:#666;font-size:.9em">'+s.fach+'</span>':'')
       +'</div>'
-      +'<div class="nex-countdown '+countdownClass+'">'+countdownText+'</div>'
-      +'<div class="nex-details">'+label
-      +(diff>0?' · '+s.exam_start+' Uhr':'')
-      +(s.pruefer?' · Prüfer: '+s.pruefer:'')
-      +'</div>';
+      +statusHtml
+      +'<div class="nex-countdown '+cdClass+'">'+cdText+'</div>'
+      +(label?'<div class="nex-details">'+label
+      +(s.prep_start?' · Vorb: '+s.prep_start:'')
+      +(s.exam_start?' · Prüf: '+s.exam_start:'')
+      +(s.pruefer?' · '+s.pruefer:'')
+      +'</div>':'');
   }
-
-  // Timer-State Zugriff für Widget
-  window._timerGet=function(sid){
-    // Greift auf den Timer-State zu (aus dem Hauptscript)
-    // T ist im anderen IIFE, daher brauchen wir einen Accessor
-    return null; // Fallback
-  };
 
   updateWidget();
   setInterval(updateWidget,1000);
 })();
-
-// Accessor für Timer-State (verbindet beide IIFEs)
-(function(){
-  var origGet=window._timerGet;
-  // Wir müssen den T-Zugriff über die sortCards/render Funktionen ermöglichen
-  // Da T im IIFE eingeschlossen ist, exponieren wir einen Getter
-})();
-</script>
-
-<!-- Timer-State Accessor Patch -->
-<script>
-// Das erste IIFE hat T nicht exponiert, daher patchen wir _timerGet
-// über die data-Attribute der Cards
-window._timerGet=function(sid){
-  var badge=document.getElementById('badge-'+sid);
-  if(!badge) return {examState:'idle'};
-  if(badge.classList.contains('st-done')) return {examState:'done'};
-  return {examState:'active'};
-};
 </script>
 </body></html>`);
     } catch(err){ console.error(err); res.status(500).send('Fehler'); }
