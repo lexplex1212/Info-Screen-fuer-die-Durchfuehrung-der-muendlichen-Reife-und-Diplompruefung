@@ -63,39 +63,37 @@ const db = new sqlite3.Database(dbPath, (err) => {
     }
 });
 
-// ===== BEIM START: Für jeden Schüler einen Timer-Eintrag anlegen (idle) =====
+// ===== BEIM START: Nur für neue Schüler (ohne Timer-Eintrag) einen idle-Eintrag anlegen =====
+// Bestehende Einträge (laufende Timer, abgeschlossene Prüfungen etc.) werden NIE verändert!
 function initAlleTimer() {
-    // Alle Klassen aus allen Zweigen sammeln
     const alleKlassen = Object.values(klassen).flat();
     const placeholders = alleKlassen.map(() => '?').join(',');
 
     db.all(`SELECT rowid, klasse FROM termine WHERE klasse IN (${placeholders})`, alleKlassen, (err, rows) => {
         if (err) {
-            console.error('Fehler beim Laden der Schüler für Timer-Init:', err.message);
+            console.error('Fehler beim Timer-Init:', err.message);
             return;
         }
         if (!rows || rows.length === 0) {
-            console.log('Keine Schüler in DB gefunden für Timer-Init.');
+            console.log('Keine Schüler gefunden.');
             return;
         }
 
-        let inserted = 0;
+        let neu = 0;
         const stmt = db.prepare(`INSERT OR IGNORE INTO timer_status 
             (schueler_id, remaining_seconds, state, exam_remaining, exam_state) 
             VALUES (?, ${VORBEREITUNGS_TIMER}, 'idle', ${PRUEFUNGS_TIMER}, 'idle')`);
 
         rows.forEach(row => {
-            // Zweig aus Klasse ableiten
             const zweig = zweigZuordnung[row.klasse];
             if (!zweig) return;
-            const schuelerId = zweig + '_' + row.rowid;
-            stmt.run([schuelerId], function(err) {
-                if (!err && this.changes > 0) inserted++;
+            stmt.run([zweig + '_' + row.rowid], function(err) {
+                if (!err && this.changes > 0) neu++;
             });
         });
 
         stmt.finalize(() => {
-            console.log(`Timer-Init: ${rows.length} Schüler geprüft, ${inserted} neue Timer-Einträge erstellt.`);
+            console.log('Timer-Init: ' + rows.length + ' Schüler, ' + neu + ' neue Einträge. Bestehende unverändert.');
         });
     });
 }
