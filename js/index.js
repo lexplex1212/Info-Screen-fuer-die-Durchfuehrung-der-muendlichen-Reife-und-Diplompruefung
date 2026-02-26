@@ -12,8 +12,8 @@ let isLoggedIn = false;
 
 // ===== TIMER-DAUER HIER ÄNDERN (in Sekunden) =====
 // 600 = 10 Min | 1200 = 20 Min | 1500 = 25 Min | 1800 = 30 Min
-const VORBEREITUNGS_TIMER = 1200;
-const PRUEFUNGS_TIMER = 720; // 12 Minuten
+const VORBEREITUNGS_TIMER = 120;
+const PRUEFUNGS_TIMER = 120; // 12 Minuten
 // ================================================
 
 const sqlite3 = require('sqlite3').verbose();
