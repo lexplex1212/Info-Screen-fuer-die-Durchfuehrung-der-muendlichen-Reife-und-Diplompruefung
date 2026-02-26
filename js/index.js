@@ -468,6 +468,8 @@ p.subtitle{color:#666;font-size:1.2em;margin-top:20px;text-align:center}
 .btn-resume:hover{background:#43a047}
 .btn-reset{background:#f44336;color:#fff}
 .btn-reset:hover{background:#d32f2f}
+.btn-skip{background:#9c27b0;color:#fff}
+.btn-skip:hover{background:#7b1fa2}
 .btn-exam{background:#2196f3;color:#fff}
 .btn-exam:hover{background:#1976d2}
 .btn-finish{background:#4caf50;color:#fff}
@@ -526,6 +528,9 @@ p.subtitle{color:#666;font-size:1.2em;margin-top:20px;text-align:center}
 .nex-status.waiting{background:#fff3cd;color:#856404}
 .nex-status.prep-active{background:#ffe0cc;color:#c0392b}
 .nex-status.exam-active{background:#d4edda;color:#155724}
+.nex-status.call-student{background:#f8d7da;color:#721c24;animation:pulse-call 1.5s infinite}
+.nex-call-msg{text-align:center;margin-top:10px;padding:10px 14px;background:#fff3cd;border-radius:8px;color:#856404;font-size:.9em;line-height:1.4}
+@keyframes pulse-call{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.7;transform:scale(1.05)}}
 
 @media(max-width:600px){.container{padding:30px 15px}.zweig-badge{padding:20px 30px;font-size:2em}.timer-time{font-size:2em}.timer-btn{padding:10px 18px;font-size:.95em}.form-row{flex-direction:column}.form-row label{min-width:auto}.next-exam-widget{position:relative;top:auto!important;right:auto!important;left:auto!important;width:100%;margin:0 auto 20px auto;border-radius:12px;cursor:default}}
 </style>
@@ -678,6 +683,7 @@ function render(sid){
     html='<div class="timer-display"><div class="timer-time">'+fmt(t.rem)+'</div><div class="timer-label">Vorbereitung läuft...</div></div>'
       +'<div class="timer-buttons">'
       +'<button class="timer-btn btn-pause" data-action="pause" data-sid="'+sid+'">Pause</button>'
+      +'<button class="timer-btn btn-skip" data-action="skip_prep" data-sid="'+sid+'">Überspringen ⏭</button>'
       +'<button class="timer-btn btn-reset" data-action="reset" data-sid="'+sid+'">Reset</button></div>';
   }
   else if(t.state==='paused'){
@@ -688,6 +694,7 @@ function render(sid){
     html='<div class="timer-display"><div class="timer-time">'+fmt(t.rem)+'</div><div class="timer-label">Pausiert</div></div>'
       +'<div class="timer-buttons">'
       +'<button class="timer-btn btn-resume" data-action="resume" data-sid="'+sid+'">Fortsetzen</button>'
+      +'<button class="timer-btn btn-skip" data-action="skip_prep" data-sid="'+sid+'">Überspringen ⏭</button>'
       +'<button class="timer-btn btn-reset" data-action="reset" data-sid="'+sid+'">Reset</button></div>';
   }
   else if(t.state==='prep_done' && t.examState==='idle'){
@@ -846,6 +853,11 @@ document.addEventListener('click',function(e){
       t.state='running'; if(t.iid)clearInterval(t.iid);
       t.iid=setInterval(function(){prepTick(sid);},1000);
       render(sid); api(sid,'resume');
+    }
+    else if(action==='skip_prep'){
+      if(t.iid){clearInterval(t.iid);t.iid=null;}
+      t.state='prep_done'; t.rem=0;
+      render(sid); api(sid,'prep_done');
     }
     else if(action==='reset'){
       var card=document.getElementById('card-'+sid);
@@ -1054,7 +1066,7 @@ fetch('/api/timers/${zweig}')
 
   // ===== WIDGET UPDATE =====
   function updateWidget(){
-    if(isCollapsed) return; // Nicht rendern wenn eingeklappt
+    if(isCollapsed) return;
 
     var now=new Date();
     var best=null;
@@ -1065,7 +1077,7 @@ fetch('/api/timers/${zweig}')
       var badge=document.getElementById('badge-'+s.sid);
       if(!badge) return;
       var cl=badge.className||'';
-      // Überspringe: fertig, Vorbereitung läuft/pausiert/fertig, Prüfung läuft
+      // Überspringe NUR Schüler wo Vorbereitung bereits gestartet/läuft/fertig/Prüfung
       if(cl.indexOf('st-done')!==-1) return;      // Prüfung abgeschlossen
       if(cl.indexOf('st-prep')!==-1) return;       // Vorbereitung läuft
       if(cl.indexOf('st-paused')!==-1) return;     // Timer pausiert
@@ -1092,37 +1104,22 @@ fetch('/api/timers/${zweig}')
 
     var s=best.s;
     var diff=best.diff;
-    var cdClass,cdText,label,statusHtml;
+    var cdClass,cdText,label,statusHtml,extraHtml='';
 
     if(diff>0){
-      // Vorbereitung noch nicht gestartet
+      // Vorbereitung-Zeit noch nicht erreicht -> Countdown
       cdText=fmtCD(diff);
-      cdClass=diff<600000?'soon':'normal'; // <10min = rot
+      cdClass=diff<600000?'soon':'normal';
       label='Vorbereitung beginnt in';
       statusHtml='<div style="text-align:center"><span class="nex-status waiting">⏳ Wartet</span></div>';
     } else {
-      // Vorbereitung sollte schon laufen oder Prüfung läuft
-      var examTime=parseDateTime(s.datum,s.exam_start);
-      var examDiff=examTime?(examTime.getTime()-now.getTime()):0;
-
-      if(examTime&&examDiff>0){
-        // Zwischen Vorbereitung und Prüfung
-        cdText=fmtCD(examDiff);
-        cdClass='active';
-        label='Prüfung beginnt in';
-        statusHtml='<div style="text-align:center"><span class="nex-status prep-active">📝 In Vorbereitung</span></div>';
-      } else if(examTime&&examDiff>-3600000){
-        // Prüfung läuft gerade
-        cdText='JETZT';
-        cdClass='soon';
-        label='Prüfung läuft';
-        statusHtml='<div style="text-align:center"><span class="nex-status exam-active">🎯 Prüfung aktiv</span></div>';
-      } else {
-        cdText='—';
-        cdClass='normal';
-        label='';
-        statusHtml='';
-      }
+      // prep_start ist vorbei, aber Lehrer hat noch nicht auf "Vorbereitung starten" geklickt
+      // -> Timer bleibt stehen, Aufforderung anzeigen
+      cdText='JETZT';
+      cdClass='soon';
+      label='';
+      statusHtml='<div style="text-align:center"><span class="nex-status call-student">📢 Schüler rufen!</span></div>';
+      extraHtml='<div class="nex-call-msg">Bitte rufen Sie den Schüler zur Vorbereitung und drücken Sie <b>„Vorbereitung starten"</b></div>';
     }
 
     content.innerHTML=
@@ -1137,7 +1134,8 @@ fetch('/api/timers/${zweig}')
       +(s.prep_start?' · Vorb: '+s.prep_start:'')
       +(s.exam_start?' · Prüf: '+s.exam_start:'')
       +(s.pruefer?' · '+s.pruefer:'')
-      +'</div>':'');
+      +'</div>':'')
+      +extraHtml;
   }
 
   updateWidget();
