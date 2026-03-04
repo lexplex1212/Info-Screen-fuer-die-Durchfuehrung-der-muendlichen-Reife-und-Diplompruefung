@@ -10,7 +10,7 @@ require('dotenv').config({override: true});
 
 let isLoggedIn = false;
 
-// ===== TIMER-DAUER HIER ÄNDERN (in Sekunden) =====
+// ===== TIMER-DAUER HIER ÄNDERN (in Sekunden) ====
 const VORBEREITUNGS_TIMER = 120;
 const PRUEFUNGS_TIMER = 120; // 12 Minuten
 // ================================================
