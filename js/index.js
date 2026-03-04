@@ -11,8 +11,8 @@ require('dotenv').config({override: true});
 let isLoggedIn = false;
 
 // ===== TIMER-DAUER HIER ÄNDERN (in Sekunden) =====
-const VORBEREITUNGS_TIMER = 120;
-const PRUEFUNGS_TIMER = 120; // 12 Minuten
+const VORBEREITUNGS_TIMER = 1200;
+const PRUEFUNGS_TIMER = 720; // 12 Minuten
 // ================================================
 
 const sqlite3 = require('sqlite3').verbose();
@@ -203,6 +203,21 @@ app.get('/api/next-exam', requireAuth, (req, res) => {
     });
 });
 
+
+// ===== ALLE TIMER auf einmal laden =====
+app.get('/api/timers/all', requireAuth, (req, res) => {
+    db.all('SELECT * FROM timer_status', [], (err, rows) => {
+        if (err) return res.status(500).json({ error: err.message });
+        const timers = {}; const now = Date.now();
+        (rows || []).forEach(row => {
+            const t = { state: row.state, remaining_seconds: row.remaining_seconds, exam_state: row.exam_state || 'idle', exam_remaining: row.exam_remaining || PRUEFUNGS_TIMER };
+            if (row.state === 'running' && row.started_at) { const el = (now - row.started_at) / 1000; t.remaining_seconds = Math.max(0, row.remaining_seconds - el); if (t.remaining_seconds <= 0) t.state = 'prep_done'; }
+            if (row.exam_state === 'running' && row.exam_started_at) { t.exam_remaining = row.exam_remaining - (now - row.exam_started_at) / 1000; }
+            timers[row.schueler_id] = t;
+        });
+        res.json(timers);
+    });
+});
 // ==================== GLOBALES WIDGET (1 Popup für Home + Zweig) ====================
 function globalWidgetHtml() {
     return `
@@ -323,44 +338,36 @@ app.get('/auth/callback', async (req, res) => {
 
 app.get('/logout', (req, res) => { req.session.destroy(() => res.redirect('/')); });
 
-// ===== HOME (mit globalem Widget) =====
+// ===== ALLE SCHÜLER laden (sortiert nach Prüfungszeit) =====
+function getAlleSchueler() {
+    return new Promise((resolve) => {
+        const alleKlassen = Object.values(klassen).flat();
+        db.all('SELECT * FROM termine WHERE klasse IN (' + alleKlassen.map(()=>'?').join(',') + ') ORDER BY datum, prep_start, exam_start', alleKlassen, (err, rows) => {
+            if (err) return resolve([]);
+            resolve(rows || []);
+        });
+    });
+}
+
+// ===== HOME: Alle Schüler auf einer Seite =====
 app.get('/home', requireAuth, async (req, res) => {
     try {
-        const s = await getKlassenStrukturAusDB();
-        const az = s ? Object.keys(s).filter(z => Object.keys(s[z]).length > 0) : Object.keys(klassen);
-        res.send(`<!DOCTYPE html><html lang="de"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>HTL - Zweigauswahl</title>
-        <style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:Arial,sans-serif;background:#07175e;min-height:100vh;display:flex;justify-content:center;align-items:center;padding:20px}.container{background:#fff;border-radius:20px;padding:50px;box-shadow:0 20px 60px rgba(0,0,0,.3);max-width:800px;width:100%}h1{text-align:center;color:#333;margin-bottom:50px;font-size:2.5em}.button-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:20px}.zweig-button{padding:40px;font-size:1.5em;font-weight:700;border:none;border-radius:15px;cursor:pointer;transition:all .3s;text-decoration:none;display:flex;align-items:center;justify-content:center;box-shadow:0 5px 15px rgba(0,0,0,.2)}.zweig-button:hover{transform:translateY(-5px);box-shadow:0 10px 25px rgba(0,0,0,.3)}.elektronik{background:#2d5016;color:#fff}.elektrotechnik{background:#e60505;color:#fff}.maschinenbau{background:#4f56d0;color:#fff}.wirtschaft{background:#ffeb3b;color:#333}</style></head>
-        <body><div class="container"><h1>Wählen Sie Ihren Zweig aus</h1><div class="button-grid">
-        ${az.map(z => '<a href="/zweig/' + z + '" class="zweig-button ' + z + '">' + zweigNamen[z] + '</a>').join('')}
-        </div></div>
-        ${globalWidgetHtml()}
-        </body></html>`);
-    } catch (e) { res.status(500).send('Fehler'); }
-});
-
-// ==================== ZWEIG PAGE (mit globalem Widget) ====================
-
-app.get('/zweig/:zweig', requireAuth, async (req, res) => {
-    const zweig = req.params.zweig.toLowerCase();
-    try {
-        if (!klassen[zweig]) return res.redirect('/home');
-        const schueler = await getSchuelerFuerZweig(zweig);
-        const farbe = zweigFarben[zweig];
-        const name = zweigNamen[zweig];
-        const tf = (zweig === 'elektrotechnik' || zweig === 'wirtschaft') ? '#333' : 'white';
-
-        const cardsHtml = schueler.map((s, i) => {
+        const schueler = await getAlleSchueler();
+        const cardsHtml = schueler.map((s) => {
+            const zweig = zweigZuordnung[s.klasse] || 'elektronik';
+            const farbe = zweigFarben[zweig] || '#333';
+            const tf = (zweig === 'elektrotechnik' || zweig === 'wirtschaft') ? '#333' : 'white';
             const sid = zweig + '_' + s.id;
-            return '<div class="schueler-item" id="card-' + sid + '" data-sid="' + sid + '">'
+            return '<div class="schueler-item" id="card-' + sid + '" data-sid="' + sid + '" style="border-left-color:' + farbe + '">'
                 + '<div class="timer-progress-bg" id="progress-' + sid + '"></div>'
                 + '<div class="card-content">'
                 +   '<div class="schueler-header">'
                 +     '<div class="schueler-name-container">'
                 +       '<div class="schueler-name">' + (s.vorname || '') + ' ' + (s.nachname || '') + '</div>'
-                +       (s.klasse ? '<span class="klassen-badge">' + s.klasse + '</span>' : '')
+                +       (s.klasse ? '<span class="klassen-badge" style="background:' + farbe + ';color:' + tf + '">' + s.klasse + '</span>' : '')
                 +       '<span class="timer-badge" id="badge-' + sid + '"></span>'
                 +     '</div>'
-                +     (s.datum ? '<div class="schueler-datum">' + s.datum + '</div>' : '')
+                +     (s.datum ? '<div class="schueler-datum" style="background:' + farbe + ';color:' + tf + '">' + s.datum + '</div>' : '')
                 +   '</div>'
                 +   '<div class="schueler-details">'
                 +     (s.fach ? '<div class="detail-item"><span class="dl">Fach:</span> ' + s.fach + '</div>' : '')
@@ -375,21 +382,19 @@ app.get('/zweig/:zweig', requireAuth, async (req, res) => {
                 + '</div></div>';
         }).join('');
 
-        res.send(`<!DOCTYPE html><html lang="de"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${name} - Schülerübersicht</title>
+        res.send(`<!DOCTYPE html><html lang="de"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>HTL - Matura Übersicht</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}body{font-family:Arial,sans-serif;background:#07175e;min-height:100vh;padding:40px 20px}
 .container{background:#fff;border-radius:20px;padding:60px;box-shadow:0 20px 60px rgba(0,0,0,.3);max-width:1050px;margin:0 auto}
-.back-button{display:inline-block;margin-bottom:30px;padding:12px 25px;background:#666;color:#fff;text-decoration:none;border-radius:8px;transition:background .3s}.back-button:hover{background:#444}
-.zweig-badge{display:inline-block;padding:30px 60px;background:${farbe};color:${tf};font-size:3em;font-weight:700;border-radius:15px;margin:30px 0;box-shadow:0 10px 30px rgba(0,0,0,.2)}
-h1{color:#333;font-size:2em;margin-top:20px;text-align:center}p.subtitle{color:#666;font-size:1.2em;margin-top:20px;text-align:center}
-.schueler-liste{margin-top:40px}
-.schueler-item{position:relative;margin:15px 0;border-radius:12px;border-left:5px solid ${farbe};box-shadow:0 2px 5px rgba(0,0,0,.1);cursor:pointer;overflow:hidden;transition:box-shadow .3s,transform .2s}
+h1{color:#333;font-size:2.2em;margin-bottom:10px;text-align:center}p.subtitle{color:#666;font-size:1.2em;margin-top:10px;text-align:center;margin-bottom:30px}
+.schueler-liste{margin-top:20px}
+.schueler-item{position:relative;margin:15px 0;border-radius:12px;border-left:5px solid #333;box-shadow:0 2px 5px rgba(0,0,0,.1);cursor:pointer;overflow:hidden;transition:box-shadow .3s,transform .2s}
 .schueler-item:hover{transform:translateX(5px);box-shadow:0 4px 12px rgba(0,0,0,.15)}.schueler-item.expanded{transform:none;box-shadow:0 6px 25px rgba(0,0,0,.2)}
 .timer-progress-bg{position:absolute;top:0;left:0;height:100%;width:0%;z-index:0;pointer-events:none;transition:width .8s linear}.card-content{position:relative;z-index:1;padding:20px}
 .schueler-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:10px}
 .schueler-name-container{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.schueler-name{font-weight:700;font-size:1.3em;color:#222}
-.klassen-badge{background:${farbe};color:${tf};padding:4px 12px;border-radius:15px;font-size:.8em;font-weight:700}
-.schueler-datum{background:${farbe};color:${tf};padding:5px 15px;border-radius:20px;font-size:.9em;font-weight:700}
+.klassen-badge{padding:4px 12px;border-radius:15px;font-size:.8em;font-weight:700}
+.schueler-datum{padding:5px 15px;border-radius:20px;font-size:.9em;font-weight:700}
 .schueler-details{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;margin-top:10px}.detail-item{color:#444;font-size:.95em;padding:5px}.dl{font-weight:700;color:#222}
 .timer-badge{display:none;padding:4px 14px;border-radius:15px;font-size:.85em;font-weight:700}.timer-badge.visible{display:inline-block}
 .timer-badge.st-prep{background:#ffe0cc;color:#c0392b}.timer-badge.st-paused{background:#ff9800;color:#fff}.timer-badge.st-prep-done{background:#ff9800;color:#fff}.timer-badge.st-exam{background:#fff3cd;color:#856404}.timer-badge.st-done{background:#4caf50;color:#fff}
@@ -405,101 +410,43 @@ h1{color:#333;font-size:2em;margin-top:20px;text-align:center}p.subtitle{color:#
 .zeit-info{text-align:center;margin:15px 0;padding:10px;border-radius:8px;font-weight:700;font-size:1.1em}.zeit-info.over{background:#ffebee;color:#c0392b}.zeit-info.under{background:#e8f5e9;color:#2e7d32}
 .done-card{text-align:center;padding:20px}.done-card h3{color:#4caf50;margin-bottom:10px;font-size:1.3em}.done-info{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:15px;text-align:left}.done-info div{padding:8px;background:rgba(0,0,0,.03);border-radius:6px}
 .confirm-overlay{display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,.5);z-index:10000;justify-content:center;align-items:center}.confirm-overlay.active{display:flex}.confirm-box{background:#fff;border-radius:15px;padding:30px 40px;max-width:400px;text-align:center;box-shadow:0 10px 40px rgba(0,0,0,.3)}.confirm-box h3{margin-bottom:15px;color:#333}.confirm-box p{margin-bottom:20px;color:#666}.confirm-box .cbtns{display:flex;gap:10px;justify-content:center}.confirm-box .cbtns button{padding:10px 25px;border:none;border-radius:8px;font-size:1em;font-weight:700;cursor:pointer}.cbtn-yes{background:#f44336;color:#fff}.cbtn-no{background:#9e9e9e;color:#fff}
-@media(max-width:600px){.container{padding:30px 15px}.zweig-badge{padding:20px 30px;font-size:2em}.timer-time{font-size:2em}.timer-btn{padding:10px 18px;font-size:.95em}.form-row{flex-direction:column}.form-row label{min-width:auto}}
+.logout-btn{display:inline-block;margin-bottom:20px;padding:10px 20px;background:#666;color:#fff;text-decoration:none;border-radius:8px;font-size:.9em;transition:background .3s}.logout-btn:hover{background:#444}
+@media(max-width:600px){.container{padding:30px 15px}.timer-time{font-size:2em}.timer-btn{padding:10px 18px;font-size:.95em}.form-row{flex-direction:column}.form-row label{min-width:auto}}
 </style></head><body>
 <div class="container">
-  <a href="/home" class="back-button">Zurück zur Zweigauswahl</a>
-  <div style="text-align:center"><div class="zweig-badge">${name}</div><h1>Zweig ${name}</h1>
-    ${schueler.length > 0 ? '<p class="subtitle">' + schueler.length + ' Schüler maturieren</p>' : '<p class="subtitle">Keine Schüler gefunden.</p>'}
-  </div>
+  <a href="/logout" class="logout-btn">Abmelden</a>
+  <h1>Matura Übersicht</h1>
+  ${schueler.length > 0 ? '<p class="subtitle">' + schueler.length + ' Schüler maturieren</p>' : '<p class="subtitle">Keine Schüler gefunden.</p>'}
   ${schueler.length > 0 ? '<div class="schueler-liste">' + cardsHtml + '</div>' : ''}
 </div>
-<div class="confirm-overlay" id="confirmOverlay"><div class="confirm-box"><h3>Wirklich zurücksetzen?</h3><p id="confirmText">Möchten Sie die Vorbereitungszeit für diesen Schüler wirklich zurücksetzen?</p><div class="cbtns"><button class="cbtn-yes" id="confirmYes">Ja, zurücksetzen</button><button class="cbtn-no" id="confirmNo">Abbrechen</button></div></div></div>
+<div class="confirm-overlay" id="confirmOverlay"><div class="confirm-box"><h3>Wirklich zurücksetzen?</h3><p id="confirmText">Möchten Sie wirklich zurücksetzen?</p><div class="cbtns"><button class="cbtn-yes" id="confirmYes">Ja, zurücksetzen</button><button class="cbtn-no" id="confirmNo">Abbrechen</button></div></div></div>
 ${globalWidgetHtml()}
 <script>
 (function(){
-var PREP = ${VORBEREITUNGS_TIMER};
-var EXAM = ${PRUEFUNGS_TIMER};
-var T = {};
-var lastRenderedState = {};
-
-function g(sid){ if(!T[sid]) T[sid]={state:'idle',rem:PREP,iid:null, examState:'idle',examRem:EXAM,eiid:null, note:null,themen:null,komm:'',zeitDiff:null}; return T[sid]; }
-function fmt(s){ var neg=s<0; s=Math.abs(s); var m=Math.floor(s/60),sc=Math.floor(s%60); return(neg?'+':'')+(m<10?'0':'')+m+':'+(sc<10?'0':'')+sc; }
-function prepColor(p){var r=Math.round(231+(255-231)*p);var gg=Math.round(76+(152-76)*p);var b=Math.round(60+(0-60)*p);return 'rgba('+r+','+gg+','+b+',0.4)';}
-function examColor(p){var r=Math.round(240+(76-240)*p);var gg=Math.round(194+(175-194)*p);var b=Math.round(48+(80-48)*p);return 'rgba('+r+','+gg+','+b+',0.45)';}
-function stateKey(sid){var t=g(sid);return t.state+'|'+t.examState;}
-
-function tickUpdate(sid){
-  var t=g(sid);var prog=document.getElementById('progress-'+sid);var badge=document.getElementById('badge-'+sid);
-  var timeEl=document.querySelector('#expcontent-'+sid+' .timer-time');var labEl=document.querySelector('#expcontent-'+sid+' .timer-label');
-  if(!prog) return;
-  if(t.state==='running'){var p=Math.max(0,Math.min(1,1-(t.rem/PREP)));prog.style.width=(p*100)+'%';prog.style.backgroundColor=prepColor(p);if(badge){badge.className='timer-badge visible st-prep';badge.textContent=fmt(t.rem)+' ⏱';}if(timeEl) timeEl.textContent=fmt(t.rem);}
-  else if(t.examState==='running'){var ep=t.examRem>=0?Math.max(0,Math.min(1,1-(t.examRem/EXAM))):1;prog.style.width=(ep*100)+'%';prog.style.backgroundColor=t.examRem<0?'rgba(231,76,60,0.35)':examColor(ep);if(badge){badge.className='timer-badge visible st-exam';badge.textContent=(t.examRem<0?'ÜBER ':'')+fmt(t.examRem)+' ⏱';}if(timeEl){timeEl.textContent=(t.examRem<0?'+':'')+fmt(t.examRem);timeEl.style.color=t.examRem<0?'#c0392b':'#222';}if(labEl){labEl.innerHTML=t.examRem<0?'<span class="timer-over">Prüfung überzogen!</span>':'Prüfung läuft...';}}
-}
-
-function render(sid){
-  var t=g(sid);var card=document.getElementById('card-'+sid);var prog=document.getElementById('progress-'+sid);var badge=document.getElementById('badge-'+sid);var ec=document.getElementById('expcontent-'+sid);
-  if(!card||!ec) return; lastRenderedState[sid]=stateKey(sid);var html='';var p;
-  if(t.state==='idle'){prog.style.width='0%';prog.style.backgroundColor='transparent';badge.className='timer-badge';html='<div class="timer-display"><div class="timer-time">'+fmt(PREP)+'</div><div class="timer-label">Vorbereitung</div></div><div class="timer-buttons"><button class="timer-btn btn-start" data-action="start" data-sid="'+sid+'">Vorbereitung starten</button></div>';}
-  else if(t.state==='running'){p=Math.max(0,Math.min(1,1-(t.rem/PREP)));prog.style.width=(p*100)+'%';prog.style.backgroundColor=prepColor(p);badge.className='timer-badge visible st-prep';badge.textContent=fmt(t.rem)+' ⏱';html='<div class="timer-display"><div class="timer-time">'+fmt(t.rem)+'</div><div class="timer-label">Vorbereitung läuft...</div></div><div class="timer-buttons"><button class="timer-btn btn-pause" data-action="pause" data-sid="'+sid+'">Pause</button><button class="timer-btn btn-skip" data-action="skip_prep" data-sid="'+sid+'">Überspringen ⏭</button><button class="timer-btn btn-reset" data-action="reset" data-sid="'+sid+'">Reset</button></div>';}
-  else if(t.state==='paused'){p=Math.max(0,Math.min(1,1-(t.rem/PREP)));prog.style.width=(p*100)+'%';prog.style.backgroundColor=prepColor(p);badge.className='timer-badge visible st-paused';badge.textContent=fmt(t.rem)+' ⏸';html='<div class="timer-display"><div class="timer-time">'+fmt(t.rem)+'</div><div class="timer-label">Pausiert</div></div><div class="timer-buttons"><button class="timer-btn btn-resume" data-action="resume" data-sid="'+sid+'">Fortsetzen</button><button class="timer-btn btn-skip" data-action="skip_prep" data-sid="'+sid+'">Überspringen ⏭</button><button class="timer-btn btn-reset" data-action="reset" data-sid="'+sid+'">Reset</button></div>';}
-  else if(t.state==='prep_done'&&t.examState==='idle'){prog.style.width='100%';prog.style.backgroundColor='rgba(255,152,0,0.45)';badge.className='timer-badge visible st-prep-done';badge.textContent='Vorbereitung fertig ✓';html='<div class="timer-display"><div class="timer-time" style="color:#e67e22">00:00</div><div class="timer-label" style="color:#e67e22;font-weight:700">Vorbereitung abgeschlossen! ✓</div></div><div class="timer-buttons"><button class="timer-btn btn-exam" data-action="exam_start" data-sid="'+sid+'">Prüfung starten</button></div>';}
-  else if(t.examState==='running'){var ep=t.examRem>=0?Math.max(0,Math.min(1,1-(t.examRem/EXAM))):1;prog.style.width=(ep*100)+'%';prog.style.backgroundColor=t.examRem<0?'rgba(231,76,60,0.35)':examColor(ep);badge.className='timer-badge visible st-exam';badge.textContent=(t.examRem<0?'ÜBER ':'')+fmt(t.examRem)+' ⏱';var ts=t.examRem<0?' style="color:#c0392b"':'';html='<div class="timer-display"><div class="timer-time"'+ts+'>'+(t.examRem<0?'+':'')+fmt(t.examRem)+'</div><div class="timer-label">'+(t.examRem<0?'<span class="timer-over">Prüfung überzogen!</span>':'Prüfung läuft...')+'</div></div><div class="timer-buttons"><button class="timer-btn btn-pause" data-action="exam_pause" data-sid="'+sid+'">Pause</button></div>'+examFormHtml(sid,t);}
-  else if(t.examState==='paused'){var ep2=t.examRem>=0?Math.max(0,Math.min(1,1-(t.examRem/EXAM))):1;prog.style.width=(ep2*100)+'%';prog.style.backgroundColor=t.examRem<0?'rgba(231,76,60,0.35)':examColor(ep2);badge.className='timer-badge visible st-paused';badge.textContent=fmt(t.examRem)+' ⏸';html='<div class="timer-display"><div class="timer-time">'+fmt(t.examRem)+'</div><div class="timer-label">Prüfung pausiert</div></div><div class="timer-buttons"><button class="timer-btn btn-resume" data-action="exam_resume" data-sid="'+sid+'">Fortsetzen</button></div>'+examFormHtml(sid,t);}
-  else if(t.examState==='done'){prog.style.width='100%';prog.style.backgroundColor='rgba(76,175,80,0.35)';badge.className='timer-badge visible st-done';badge.textContent='Abgeschlossen ✓';var zd=t.zeitDiff,zdText='',zdClass='';if(zd!==null&&zd!==undefined){if(zd>0){zdText=fmt(zd)+' früher fertig';zdClass='under';}else if(zd<0){zdText=fmt(Math.abs(zd))+' überzogen';zdClass='over';}else{zdText='Genau in der Zeit';zdClass='under';}}html='<div class="done-card"><h3 style="color:#4caf50">Prüfung abgeschlossen ✓</h3>'+(zdText?'<div class="zeit-info '+zdClass+'">'+zdText+'</div>':'')+'<div class="done-info"><div><span class="dl">Note:</span> '+t.note+'</div><div><span class="dl">Themenpool:</span> '+t.themen+'</div>'+(t.komm?'<div style="grid-column:1/-1"><span class="dl">Kommentar:</span> '+t.komm+'</div>':'')+'</div></div>';}
-  ec.innerHTML=html;
-}
-
-function examFormHtml(sid,t){
-  var noteOpts='<option value="">-- Note wählen --</option>';for(var i=1;i<=5;i++) noteOpts+='<option value="'+i+'"'+(t.note==i?' selected':'')+'>'+i+'</option>';
-  var thOpts='<option value="">-- Themenpool --</option>';for(var j=1;j<=8;j++) thOpts+='<option value="'+j+'"'+(t.themen==j?' selected':'')+'>'+j+'</option>';
-  return '<div class="exam-form"><h3>Prüfungsergebnis eintragen</h3><div class="form-row"><label>Note<span class="pflicht">*</span></label><select id="note-'+sid+'" data-field="note" data-sid="'+sid+'">'+noteOpts+'</select></div><div class="form-row"><label>Themenpool<span class="pflicht">*</span></label><select id="themen-'+sid+'" data-field="themen" data-sid="'+sid+'">'+thOpts+'</select></div><div class="form-row"><label>Kommentar</label><textarea id="komm-'+sid+'" data-field="komm" data-sid="'+sid+'" placeholder="Optional...">'+(t.komm||'')+'</textarea></div><div class="timer-buttons"><button class="timer-btn btn-finish" data-action="exam_finish" data-sid="'+sid+'">Prüfung abschließen</button></div></div>';
-}
-
-function prepTick(sid){var t=g(sid);if(t.state!=='running')return;t.rem=Math.max(0,t.rem-1);if(t.rem<=0){t.state='prep_done';if(t.iid){clearInterval(t.iid);t.iid=null;}api(sid,'prep_done');render(sid);}else{tickUpdate(sid);}}
-function examTick(sid){var t=g(sid);if(t.examState!=='running')return;t.examRem=t.examRem-1;tickUpdate(sid);}
+var PREP=${VORBEREITUNGS_TIMER},EXAM=${PRUEFUNGS_TIMER},T={};
+function g(sid){if(!T[sid])T[sid]={state:'idle',rem:PREP,iid:null,examState:'idle',examRem:EXAM,eiid:null,note:null,themen:null,komm:'',zeitDiff:null};return T[sid];}
+function fmt(s){var neg=s<0;s=Math.abs(s);var m=Math.floor(s/60),sc=Math.floor(s%60);return(neg?'+':'')+(m<10?'0':'')+m+':'+(sc<10?'0':'')+sc;}
+function prepColor(p){var r=Math.round(231+(255-231)*p),g2=Math.round(76+(152-76)*p),b=Math.round(60+(0-60)*p);return 'rgba('+r+','+g2+','+b+',0.4)';}
+function examColor(p){var r=Math.round(240+(76-240)*p),g2=Math.round(194+(175-194)*p),b=Math.round(48+(80-48)*p);return 'rgba('+r+','+g2+','+b+',0.45)';}
+function tickUpdate(sid){var t=g(sid),prog=document.getElementById('progress-'+sid),badge=document.getElementById('badge-'+sid),timeEl=document.querySelector('#expcontent-'+sid+' .timer-time'),labEl=document.querySelector('#expcontent-'+sid+' .timer-label');if(!prog)return;if(t.state==='running'){var p=Math.max(0,Math.min(1,1-(t.rem/PREP)));prog.style.width=(p*100)+'%';prog.style.backgroundColor=prepColor(p);if(badge){badge.className='timer-badge visible st-prep';badge.textContent=fmt(t.rem)+' ⏱';}if(timeEl)timeEl.textContent=fmt(t.rem);}else if(t.examState==='running'){var ep=t.examRem>=0?Math.max(0,Math.min(1,1-(t.examRem/EXAM))):1;prog.style.width=(ep*100)+'%';prog.style.backgroundColor=t.examRem<0?'rgba(231,76,60,0.35)':examColor(ep);if(badge){badge.className='timer-badge visible st-exam';badge.textContent=(t.examRem<0?'ÜBER ':'')+fmt(t.examRem)+' ⏱';}if(timeEl){timeEl.textContent=(t.examRem<0?'+':'')+fmt(t.examRem);timeEl.style.color=t.examRem<0?'#c0392b':'#222';}if(labEl)labEl.innerHTML=t.examRem<0?'<span class="timer-over">Prüfung überzogen!</span>':'Prüfung läuft...';}}
+function render(sid){var t=g(sid),card=document.getElementById('card-'+sid),prog=document.getElementById('progress-'+sid),badge=document.getElementById('badge-'+sid),ec=document.getElementById('expcontent-'+sid);if(!card||!ec)return;var html='',p;if(t.state==='idle'){prog.style.width='0%';prog.style.backgroundColor='transparent';badge.className='timer-badge';html='<div class="timer-display"><div class="timer-time">'+fmt(PREP)+'</div><div class="timer-label">Vorbereitung</div></div><div class="timer-buttons"><button class="timer-btn btn-start" data-action="start" data-sid="'+sid+'">Vorbereitung starten</button></div>';}else if(t.state==='running'){p=Math.max(0,Math.min(1,1-(t.rem/PREP)));prog.style.width=(p*100)+'%';prog.style.backgroundColor=prepColor(p);badge.className='timer-badge visible st-prep';badge.textContent=fmt(t.rem)+' ⏱';html='<div class="timer-display"><div class="timer-time">'+fmt(t.rem)+'</div><div class="timer-label">Vorbereitung läuft...</div></div><div class="timer-buttons"><button class="timer-btn btn-pause" data-action="pause" data-sid="'+sid+'">Pause</button><button class="timer-btn btn-skip" data-action="skip_prep" data-sid="'+sid+'">Überspringen ⏭</button><button class="timer-btn btn-reset" data-action="reset" data-sid="'+sid+'">Reset</button></div>';}else if(t.state==='paused'){p=Math.max(0,Math.min(1,1-(t.rem/PREP)));prog.style.width=(p*100)+'%';prog.style.backgroundColor=prepColor(p);badge.className='timer-badge visible st-paused';badge.textContent=fmt(t.rem)+' ⏸';html='<div class="timer-display"><div class="timer-time">'+fmt(t.rem)+'</div><div class="timer-label">Pausiert</div></div><div class="timer-buttons"><button class="timer-btn btn-resume" data-action="resume" data-sid="'+sid+'">Fortsetzen</button><button class="timer-btn btn-skip" data-action="skip_prep" data-sid="'+sid+'">Überspringen ⏭</button><button class="timer-btn btn-reset" data-action="reset" data-sid="'+sid+'">Reset</button></div>';}else if(t.state==='prep_done'&&t.examState==='idle'){prog.style.width='100%';prog.style.backgroundColor='rgba(255,152,0,0.45)';badge.className='timer-badge visible st-prep-done';badge.textContent='Vorbereitung fertig ✓';html='<div class="timer-display"><div class="timer-time" style="color:#e67e22">00:00</div><div class="timer-label" style="color:#e67e22;font-weight:700">Vorbereitung abgeschlossen! ✓</div></div><div class="timer-buttons"><button class="timer-btn btn-exam" data-action="exam_start" data-sid="'+sid+'">Prüfung starten</button></div>';}else if(t.examState==='running'){var ep=t.examRem>=0?Math.max(0,Math.min(1,1-(t.examRem/EXAM))):1;prog.style.width=(ep*100)+'%';prog.style.backgroundColor=t.examRem<0?'rgba(231,76,60,0.35)':examColor(ep);badge.className='timer-badge visible st-exam';badge.textContent=(t.examRem<0?'ÜBER ':'')+fmt(t.examRem)+' ⏱';var ts2=t.examRem<0?' style="color:#c0392b"':'';html='<div class="timer-display"><div class="timer-time"'+ts2+'>'+(t.examRem<0?'+':'')+fmt(t.examRem)+'</div><div class="timer-label">'+(t.examRem<0?'<span class="timer-over">Prüfung überzogen!</span>':'Prüfung läuft...')+'</div></div><div class="timer-buttons"><button class="timer-btn btn-pause" data-action="exam_pause" data-sid="'+sid+'">Pause</button></div>'+examFormHtml(sid,t);}else if(t.examState==='paused'){var ep3=t.examRem>=0?Math.max(0,Math.min(1,1-(t.examRem/EXAM))):1;prog.style.width=(ep3*100)+'%';prog.style.backgroundColor=t.examRem<0?'rgba(231,76,60,0.35)':examColor(ep3);badge.className='timer-badge visible st-paused';badge.textContent=fmt(t.examRem)+' ⏸';html='<div class="timer-display"><div class="timer-time">'+fmt(t.examRem)+'</div><div class="timer-label">Prüfung pausiert</div></div><div class="timer-buttons"><button class="timer-btn btn-resume" data-action="exam_resume" data-sid="'+sid+'">Fortsetzen</button></div>'+examFormHtml(sid,t);}else if(t.examState==='done'){prog.style.width='100%';prog.style.backgroundColor='rgba(76,175,80,0.35)';badge.className='timer-badge visible st-done';badge.textContent='Abgeschlossen ✓';var zd=t.zeitDiff,zdText='',zdClass='';if(zd!==null&&zd!==undefined){if(zd>0){zdText=fmt(zd)+' früher fertig';zdClass='under';}else if(zd<0){zdText=fmt(Math.abs(zd))+' überzogen';zdClass='over';}else{zdText='Genau in der Zeit';zdClass='under';}}html='<div class="done-card"><h3 style="color:#4caf50">Prüfung abgeschlossen ✓</h3>'+(zdText?'<div class="zeit-info '+zdClass+'">'+zdText+'</div>':'')+'<div class="done-info"><div><span class="dl">Note:</span> '+t.note+'</div><div><span class="dl">Themenpool:</span> '+t.themen+'</div>'+(t.komm?'<div style="grid-column:1/-1"><span class="dl">Kommentar:</span> '+t.komm+'</div>':'')+'</div></div>';}ec.innerHTML=html;}
+function examFormHtml(sid,t){var noteOpts='<option value="">-- Note --</option>';for(var i=1;i<=5;i++)noteOpts+='<option value="'+i+'"'+(t.note==i?' selected':'')+'>'+i+'</option>';var thOpts='<option value="">-- Themenpool --</option>';for(var j=1;j<=8;j++)thOpts+='<option value="'+j+'"'+(t.themen==j?' selected':'')+'>'+j+'</option>';return '<div class="exam-form"><h3>Prüfungsergebnis eintragen</h3><div class="form-row"><label>Note<span class="pflicht">*</span></label><select id="note-'+sid+'" data-field="note" data-sid="'+sid+'">'+noteOpts+'</select></div><div class="form-row"><label>Themenpool<span class="pflicht">*</span></label><select id="themen-'+sid+'" data-field="themen" data-sid="'+sid+'">'+thOpts+'</select></div><div class="form-row"><label>Kommentar</label><textarea id="komm-'+sid+'" data-field="komm" data-sid="'+sid+'" placeholder="Optional...">'+(t.komm||'')+'</textarea></div><div class="timer-buttons"><button class="timer-btn btn-finish" data-action="exam_finish" data-sid="'+sid+'">Prüfung abschließen</button></div></div>';}
+function prepTick(sid){var t=g(sid);if(t.state!=='running')return;t.rem=Math.max(0,t.rem-1);if(t.rem<=0){t.state='prep_done';if(t.iid){clearInterval(t.iid);t.iid=null;}api(sid,'prep_done');render(sid);}else tickUpdate(sid);}
+function examTick(sid){var t=g(sid);if(t.examState!=='running')return;t.examRem-=1;tickUpdate(sid);}
 function api(sid,action,body){var o={method:'POST',headers:{'Content-Type':'application/json'}};if(body)o.body=JSON.stringify(body);fetch('/api/timer/'+sid+'/'+action,o).catch(function(e){console.warn('Sync:',e);});}
-function sortCards(){var liste=document.querySelector('.schueler-liste');if(!liste)return;var cards=Array.from(liste.querySelectorAll('.schueler-item'));cards.sort(function(a,b){return(g(a.getAttribute('data-sid')).examState==='done'?1:0)-(g(b.getAttribute('data-sid')).examState==='done'?1:0);});cards.forEach(function(c){liste.appendChild(c);});}
-
-var pendingResetSid=null;var overlay=document.getElementById('confirmOverlay');var confirmText=document.getElementById('confirmText');
-document.getElementById('confirmYes').addEventListener('click',function(){if(pendingResetSid){var t=g(pendingResetSid);if(t.iid){clearInterval(t.iid);t.iid=null;}if(t.eiid){clearInterval(t.eiid);t.eiid=null;}t.state='idle';t.rem=PREP;t.examState='idle';t.examRem=EXAM;t.note=null;t.themen=null;t.komm='';t.zeitDiff=null;render(pendingResetSid);api(pendingResetSid,'reset');sortCards();}overlay.classList.remove('active');pendingResetSid=null;});
-document.getElementById('confirmNo').addEventListener('click',function(){overlay.classList.remove('active');pendingResetSid=null;});
-
-document.addEventListener('click',function(e){
-  var btn=e.target.closest('.timer-btn');
-  if(btn){e.stopPropagation();e.preventDefault();var action=btn.getAttribute('data-action');var sid=btn.getAttribute('data-sid');if(!action||!sid)return;var t=g(sid);
-    if(action==='start'){if(t.iid)clearInterval(t.iid);t.state='running';t.rem=PREP;t.iid=setInterval(function(){prepTick(sid);},1000);render(sid);api(sid,'start');}
-    else if(action==='pause'){t.state='paused';if(t.iid){clearInterval(t.iid);t.iid=null;}render(sid);api(sid,'pause',{remaining_seconds:t.rem});}
-    else if(action==='resume'){t.state='running';if(t.iid)clearInterval(t.iid);t.iid=setInterval(function(){prepTick(sid);},1000);render(sid);api(sid,'resume');}
-    else if(action==='skip_prep'){if(t.iid){clearInterval(t.iid);t.iid=null;}t.state='prep_done';t.rem=0;render(sid);api(sid,'prep_done');}
-    else if(action==='reset'){var card=document.getElementById('card-'+sid);var nameEl=card?card.querySelector('.schueler-name'):null;var sname=nameEl?nameEl.textContent:'diesen Schüler';confirmText.textContent='Möchten Sie die Vorbereitungszeit für "'+sname.trim()+'" wirklich zurücksetzen? Alle Daten gehen verloren.';pendingResetSid=sid;overlay.classList.add('active');}
-    else if(action==='exam_start'){t.examState='running';t.examRem=EXAM;if(t.eiid)clearInterval(t.eiid);t.eiid=setInterval(function(){examTick(sid);},1000);var card2=document.getElementById('card-'+sid);if(card2)card2.classList.add('expanded');render(sid);api(sid,'exam_start');}
-    else if(action==='exam_pause'){t.examState='paused';if(t.eiid){clearInterval(t.eiid);t.eiid=null;}render(sid);api(sid,'exam_pause',{exam_remaining:t.examRem});}
-    else if(action==='exam_resume'){t.examState='running';if(t.eiid)clearInterval(t.eiid);t.eiid=setInterval(function(){examTick(sid);},1000);render(sid);api(sid,'exam_resume');}
-    else if(action==='exam_finish'){var noteEl=document.getElementById('note-'+sid);var themenEl=document.getElementById('themen-'+sid);var kommEl=document.getElementById('komm-'+sid);var note=noteEl?noteEl.value:'';var themen=themenEl?themenEl.value:'';var komm=kommEl?kommEl.value:'';if(!note||!themen){alert('Bitte Note und Themenpool auswählen!');return;}if(t.eiid){clearInterval(t.eiid);t.eiid=null;}t.examState='done';t.note=parseInt(note);t.themen=parseInt(themen);t.komm=komm;t.zeitDiff=t.examRem;render(sid);api(sid,'exam_finish',{note:t.note,themenpool:t.themen,kommentar:komm,zeit_differenz:t.zeitDiff});sortCards();}
-    return;}
-  if(e.target.closest('.exam-form')){e.stopPropagation();return;}
-  var card=e.target.closest('.schueler-item');if(card)card.classList.toggle('expanded');
-});
-document.addEventListener('change',function(e){var el=e.target;if(el.matches('select[data-field]')){var sid=el.getAttribute('data-sid');var field=el.getAttribute('data-field');var t=g(sid);if(field==='note')t.note=parseInt(el.value)||null;if(field==='themen')t.themen=parseInt(el.value)||null;}});
-document.addEventListener('input',function(e){var el=e.target;if(el.matches('textarea[data-field]')){var sid=el.getAttribute('data-sid');g(sid).komm=el.value;}});
+function sortCards(){var l=document.querySelector('.schueler-liste');if(!l)return;var c=Array.from(l.querySelectorAll('.schueler-item'));c.sort(function(a,b){return(g(a.getAttribute('data-sid')).examState==='done'?1:0)-(g(b.getAttribute('data-sid')).examState==='done'?1:0);});c.forEach(function(x){l.appendChild(x);});}
+var pendingResetSid=null,ov=document.getElementById('confirmOverlay'),ct=document.getElementById('confirmText');
+document.getElementById('confirmYes').addEventListener('click',function(){if(pendingResetSid){var t=g(pendingResetSid);if(t.iid)clearInterval(t.iid);if(t.eiid)clearInterval(t.eiid);t.iid=null;t.eiid=null;t.state='idle';t.rem=PREP;t.examState='idle';t.examRem=EXAM;t.note=null;t.themen=null;t.komm='';t.zeitDiff=null;render(pendingResetSid);api(pendingResetSid,'reset');sortCards();}ov.classList.remove('active');pendingResetSid=null;});
+document.getElementById('confirmNo').addEventListener('click',function(){ov.classList.remove('active');pendingResetSid=null;});
+document.addEventListener('click',function(e){var btn=e.target.closest('.timer-btn');if(btn){e.stopPropagation();e.preventDefault();var action=btn.getAttribute('data-action'),sid=btn.getAttribute('data-sid');if(!action||!sid)return;var t=g(sid);if(action==='start'){if(t.iid)clearInterval(t.iid);t.state='running';t.rem=PREP;t.iid=setInterval(function(){prepTick(sid);},1000);render(sid);api(sid,'start');}else if(action==='pause'){t.state='paused';if(t.iid){clearInterval(t.iid);t.iid=null;}render(sid);api(sid,'pause',{remaining_seconds:t.rem});}else if(action==='resume'){t.state='running';if(t.iid)clearInterval(t.iid);t.iid=setInterval(function(){prepTick(sid);},1000);render(sid);api(sid,'resume');}else if(action==='skip_prep'){if(t.iid){clearInterval(t.iid);t.iid=null;}t.state='prep_done';t.rem=0;render(sid);api(sid,'prep_done');}else if(action==='reset'){var card=document.getElementById('card-'+sid),ne=card?card.querySelector('.schueler-name'):null;ct.textContent='Möchten Sie "'+(ne?ne.textContent.trim():'diesen Schüler')+'" wirklich zurücksetzen?';pendingResetSid=sid;ov.classList.add('active');}else if(action==='exam_start'){t.examState='running';t.examRem=EXAM;if(t.eiid)clearInterval(t.eiid);t.eiid=setInterval(function(){examTick(sid);},1000);var c2=document.getElementById('card-'+sid);if(c2)c2.classList.add('expanded');render(sid);api(sid,'exam_start');}else if(action==='exam_pause'){t.examState='paused';if(t.eiid){clearInterval(t.eiid);t.eiid=null;}render(sid);api(sid,'exam_pause',{exam_remaining:t.examRem});}else if(action==='exam_resume'){t.examState='running';if(t.eiid)clearInterval(t.eiid);t.eiid=setInterval(function(){examTick(sid);},1000);render(sid);api(sid,'exam_resume');}else if(action==='exam_finish'){var noteEl=document.getElementById('note-'+sid),thEl=document.getElementById('themen-'+sid),koEl=document.getElementById('komm-'+sid),note=noteEl?noteEl.value:'',th=thEl?thEl.value:'',ko=koEl?koEl.value:'';if(!note||!th){alert('Bitte Note und Themenpool auswählen!');return;}if(t.eiid){clearInterval(t.eiid);t.eiid=null;}t.examState='done';t.note=parseInt(note);t.themen=parseInt(th);t.komm=ko;t.zeitDiff=t.examRem;render(sid);api(sid,'exam_finish',{note:t.note,themenpool:t.themen,kommentar:ko,zeit_differenz:t.zeitDiff});sortCards();}return;}if(e.target.closest('.exam-form')){e.stopPropagation();return;}var card=e.target.closest('.schueler-item');if(card)card.classList.toggle('expanded');});
+document.addEventListener('change',function(e){var el=e.target;if(el.matches('select[data-field]')){var sid=el.getAttribute('data-sid'),f=el.getAttribute('data-field'),t=g(sid);if(f==='note')t.note=parseInt(el.value)||null;if(f==='themen')t.themen=parseInt(el.value)||null;}});
+document.addEventListener('input',function(e){var el=e.target;if(el.matches('textarea[data-field]'))g(el.getAttribute('data-sid')).komm=el.value;});
 document.addEventListener('mousedown',function(e){if(e.target.closest('.exam-form'))e.stopPropagation();},true);
-
 document.querySelectorAll('.schueler-item').forEach(function(c){var sid=c.getAttribute('data-sid');if(sid)render(sid);});
-
-fetch('/api/timers/${zweig}').then(function(r){return r.json();}).then(function(data){
-  for(var sid in data){if(!data.hasOwnProperty(sid))continue;var info=data[sid];var t=g(sid);
-    t.rem=Math.max(0,info.remaining_seconds);t.state=info.state||'idle';t.examState=info.exam_state||'idle';t.examRem=info.exam_remaining!==undefined?info.exam_remaining:EXAM;
-    t.note=null;t.themen=null;t.komm='';t.zeitDiff=null;
-    if(t.state==='prep_done')t.rem=0;
-    if(t.state==='running'&&t.rem>0){(function(id){t.iid=setInterval(function(){prepTick(id);},1000);})(sid);}
-    if(t.examState==='running'){(function(id){t.eiid=setInterval(function(){examTick(id);},1000);})(sid);}
-    render(sid);}
-  sortCards();
-}).catch(function(e){console.warn('Load:',e);});
+fetch('/api/timers/all').then(function(r){return r.json();}).then(function(data){for(var sid in data){if(!data.hasOwnProperty(sid))continue;var info=data[sid],t=g(sid);t.rem=Math.max(0,info.remaining_seconds);t.state=info.state||'idle';t.examState=info.exam_state||'idle';t.examRem=info.exam_remaining!==undefined?info.exam_remaining:EXAM;t.note=null;t.themen=null;t.komm='';t.zeitDiff=null;if(t.state==='prep_done')t.rem=0;if(t.state==='running'&&t.rem>0){(function(id){t.iid=setInterval(function(){prepTick(id);},1000);})(sid);}if(t.examState==='running'){(function(id){t.eiid=setInterval(function(){examTick(id);},1000);})(sid);}render(sid);}sortCards();}).catch(function(e){console.warn('Load:',e);});
 })();
 </script></body></html>`);
-    } catch(err){ console.error(err); res.status(500).send('Fehler'); }
+    } catch(err) { console.error(err); res.status(500).send('Fehler'); }
 });
 
 // ==================== HTTPS ====================
