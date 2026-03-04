@@ -10,7 +10,7 @@ require('dotenv').config({override: true});
 
 let isLoggedIn = false;
 
-// ===== TIMER-DAUER HIER ÄNDERN (in Sekunden) ====
+// ===== TIMER-DAUER HIER ÄNDERN (in Sekunden) =====
 const VORBEREITUNGS_TIMER = 120;
 const PRUEFUNGS_TIMER = 120; // 12 Minuten
 // ================================================
@@ -50,9 +50,8 @@ const db = new sqlite3.Database(dbPath, (err) => {
                                                                                     Pruefung_geplant TEXT,
                                                                                     Pruefung_real TEXT,
                                                                                     Pruefungsdauer TEXT,
-                                                                                    Themenpool INTEGER, Note INTEGER, Kommentar TEXT,
-                                                                                    erstellt_am TEXT DEFAULT (datetime('now','localtime'))
-                            )`, () => { console.log('Alle Tabellen bereit'); initAlleTimer(); });
+                                                                                    Themenpool INTEGER, Note INTEGER, Kommentar TEXT
+                                )`, () => { console.log('Alle Tabellen bereit'); initAlleTimer(); });
                     }
                 });
             });
@@ -65,12 +64,12 @@ function nowTimeStr() { const d=new Date(); return ('0'+d.getHours()).slice(-2)+
 function initAlleTimer() {
     const alleKlassen = Object.values(klassen).flat();
     const placeholders = alleKlassen.map(() => '?').join(',');
-    db.all(`SELECT rowid, klasse FROM termine WHERE klasse IN (${placeholders})`, alleKlassen, (err, rows) => {
+    db.all(`SELECT id, klasse FROM termine WHERE klasse IN (${placeholders})`, alleKlassen, (err, rows) => {
         if (err) { console.error('Fehler beim Timer-Init:', err.message); return; }
         if (!rows || rows.length === 0) { console.log('Keine Schüler gefunden.'); return; }
         let neu = 0;
         const stmt = db.prepare(`INSERT OR IGNORE INTO timer_status (schueler_id, remaining_seconds, state, exam_remaining, exam_state) VALUES (?, ${VORBEREITUNGS_TIMER}, 'idle', ${PRUEFUNGS_TIMER}, 'idle')`);
-        rows.forEach(row => { const zweig = zweigZuordnung[row.klasse]; if (!zweig) return; stmt.run([zweig + '_' + row.rowid], function(err) { if (!err && this.changes > 0) neu++; }); });
+        rows.forEach(row => { const zweig = zweigZuordnung[row.klasse]; if (!zweig) return; stmt.run([zweig + '_' + row.id], function(err) { if (!err && this.changes > 0) neu++; }); });
         stmt.finalize(() => { console.log('Timer-Init: ' + rows.length + ' Schüler, ' + neu + ' neue Einträge. Bestehende unverändert.'); });
     });
 }
@@ -86,7 +85,7 @@ const zweigNamen = { elektronik: 'Elektronik', elektrotechnik: 'Elektrotechnik',
 const zweigZuordnung = { '5AHEL': 'elektronik', '5BHEL': 'elektronik', '5CHEL': 'elektronik', '5AHET': 'elektrotechnik', '5BHET': 'elektrotechnik', '5CHET': 'elektrotechnik', '5AHMBS': 'maschinenbau', '5BHMBZ': 'maschinenbau', '5VHMBS': 'maschinenbau', '5AHWIE': 'wirtschaft', '5BHWIE': 'wirtschaft', '5DHWIE': 'wirtschaft' };
 
 function getKlassenStrukturAusDB() { return new Promise((resolve) => { db.all('SELECT DISTINCT klasse FROM termine WHERE klasse IS NOT NULL ORDER BY klasse', [], (err, rows) => { if (err) return resolve(null); const s = { elektronik: {}, elektrotechnik: {}, maschinenbau: {}, wirtschaft: {} }; rows.forEach(r => { const z = zweigZuordnung[r.klasse]; if (z) s[z][r.klasse] = []; }); resolve(s); }); }); }
-function getSchuelerFuerZweig(zweig) { return new Promise((resolve) => { const kl = klassen[zweig] || []; if (!kl.length) return resolve([]); const ph = kl.map(() => '?').join(','); db.all(`SELECT rowid, * FROM termine WHERE klasse IN (${ph}) ORDER BY klasse, nachname, vorname`, kl, (err, rows) => resolve(err ? [] : rows)); }); }
+function getSchuelerFuerZweig(zweig) { return new Promise((resolve) => { const kl = klassen[zweig] || []; if (!kl.length) return resolve([]); const ph = kl.map(() => '?').join(','); db.all(`SELECT * FROM termine WHERE klasse IN (${ph}) ORDER BY klasse, nachname, vorname`, kl, (err, rows) => resolve(err ? [] : rows)); }); }
 
 // ==================== TIMER API ====================
 
@@ -151,8 +150,8 @@ app.post('/api/timer/:id/exam_finish', requireAuth, (req, res) => {
     if (!note || !themenpool) return res.status(400).json({ error: 'Note und Themenpool sind Pflicht' });
     db.run(`UPDATE timer_status SET exam_state='done' WHERE schueler_id=?`, [id], (err) => {
         if (err) return res.status(500).json({ error: err.message });
-        const rowid = id.split('_').slice(1).join('_');
-        db.get('SELECT * FROM termine WHERE rowid=?', [rowid], (e2, sch) => {
+        const termineId = id.split('_').slice(1).join('_');
+        db.get('SELECT * FROM termine WHERE id=?', [termineId], (e2, sch) => {
             db.get('SELECT exam_start_real FROM timer_status WHERE schueler_id=?', [id], (e3, ts) => {
                 // Prüfungsdauer: PRUEFUNGS_TIMER - verbleibende Sekunden = tatsächlich gebraucht
                 let dauer = '';
@@ -192,12 +191,12 @@ app.get('/api/timers/:zweig', requireAuth, (req, res) => {
 // ===== GLOBALE API: Nächste Prüfung über ALLE Zweige =====
 app.get('/api/next-exam', requireAuth, (req, res) => {
     const alleKlassen = Object.values(klassen).flat();
-    db.all('SELECT rowid, * FROM termine WHERE klasse IN (' + alleKlassen.map(()=>'?').join(',') + ') ORDER BY datum, prep_start, rep_start, exam_start', alleKlassen, (err, rows) => {
+    db.all('SELECT * FROM termine WHERE klasse IN (' + alleKlassen.map(()=>'?').join(',') + ') ORDER BY datum, prep_start, exam_start', alleKlassen, (err, rows) => {
         if (err) return res.status(500).json({ error: err.message });
         db.all('SELECT schueler_id, state, exam_state FROM timer_status', [], (e2, timers) => {
             const tMap = {}; (timers || []).forEach(t => tMap[t.schueler_id] = t);
             res.json((rows || []).map(s => {
-                const z = zweigZuordnung[s.klasse] || '', sid = z + '_' + s.rowid, ts = tMap[sid];
+                const z = zweigZuordnung[s.klasse] || '', sid = z + '_' + s.id, ts = tMap[sid];
                 return { sid, vorname: s.vorname||'', nachname: s.nachname||'', klasse: s.klasse||'', fach: s.fach||'', pruefer: s.pruefer||'', datum: s.datum||'', prep_start: s.prep_start||s.rep_start||'', exam_start: s.exam_start||'', zweig: z, farbe: zweigFarben[z]||'#333', textFarbe: (z==='elektrotechnik'||z==='wirtschaft')?'#333':'white', state: ts?ts.state:'idle', exam_state: ts?ts.exam_state:'idle' };
             }));
         });
@@ -351,7 +350,7 @@ app.get('/zweig/:zweig', requireAuth, async (req, res) => {
         const tf = (zweig === 'elektrotechnik' || zweig === 'wirtschaft') ? '#333' : 'white';
 
         const cardsHtml = schueler.map((s, i) => {
-            const sid = zweig + '_' + (s.rowid || i);
+            const sid = zweig + '_' + s.id;
             return '<div class="schueler-item" id="card-' + sid + '" data-sid="' + sid + '">'
                 + '<div class="timer-progress-bg" id="progress-' + sid + '"></div>'
                 + '<div class="card-content">'
