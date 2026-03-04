@@ -11,14 +11,12 @@ require('dotenv').config({override: true});
 let isLoggedIn = false;
 
 // ===== TIMER-DAUER HIER ÄNDERN (in Sekunden) =====
-// 600 = 10 Min | 1200 = 20 Min | 1500 = 25 Min | 1800 = 30 Min
-const VORBEREITUNGS_TIMER = 1200;
-const PRUEFUNGS_TIMER = 720; // 12 Minuten
+const VORBEREITUNGS_TIMER = 120;
+const PRUEFUNGS_TIMER = 120; // 12 Minuten
 // ================================================
 
 const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
-
 const dbPath = path.join(__dirname, '..', 'termineordner', 'termine.db');
 
 const db = new sqlite3.Database(dbPath, (err) => {
@@ -29,8 +27,7 @@ const db = new sqlite3.Database(dbPath, (err) => {
         db.run(`CREATE TABLE IF NOT EXISTS timer_status (
                                                             id INTEGER PRIMARY KEY AUTOINCREMENT,
                                                             schueler_id TEXT UNIQUE NOT NULL,
-                                                            started_at INTEGER,
-                                                            paused_at INTEGER,
+                                                            started_at INTEGER, paused_at INTEGER,
                                                             remaining_seconds REAL NOT NULL DEFAULT ${VORBEREITUNGS_TIMER},
                                                             state TEXT NOT NULL DEFAULT 'idle'
                 )`, () => {
@@ -38,40 +35,26 @@ const db = new sqlite3.Database(dbPath, (err) => {
                 ['exam_started_at', 'INTEGER'],
                 ['exam_remaining', 'REAL DEFAULT ' + PRUEFUNGS_TIMER],
                 ['exam_state', "TEXT DEFAULT 'idle'"],
-                ['note', 'INTEGER'],
-                ['themenpool', 'INTEGER'],
-                ['kommentar', 'TEXT'],
-                ['zeit_differenz', 'REAL'],
-                ['v_start_real', 'TEXT'],
-                ['exam_start_real', 'TEXT']
+                ['note', 'INTEGER'], ['themenpool', 'INTEGER'],
+                ['kommentar', 'TEXT'], ['zeit_differenz', 'REAL'],
+                ['v_start_real', 'TEXT'], ['exam_start_real', 'TEXT']
             ];
             let done = 0;
             newCols.forEach(([col, type]) => {
                 db.run(`ALTER TABLE timer_status ADD COLUMN ${col} ${type}`, (err) => {
-                    if (err && !err.message.includes('duplicate column')) {
-                        console.error('Spalte ' + col + ':', err.message);
-                    }
+                    if (err && !err.message.includes('duplicate column')) console.error('Spalte ' + col + ':', err.message);
                     done++;
                     if (done === newCols.length) {
                         db.run(`CREATE TABLE IF NOT EXISTS Pruefungs_Auswertung (
                             id INTEGER PRIMARY KEY AUTOINCREMENT,
                             schueler_id TEXT NOT NULL,
-                            Klasse TEXT,
-                            Nachname TEXT,
-                            Name TEXT,
-                            V_start_geplant TEXT,
-                            V_start_real TEXT,
-                            Exam_start_geplant TEXT,
-                            Exam_start_real TEXT,
+                            Klasse TEXT, Nachname TEXT, Name TEXT,
+                            V_start_geplant TEXT, V_start_real TEXT,
+                            Exam_start_geplant TEXT, Exam_start_real TEXT,
                             Pruefungsueberzug TEXT,
-                            Themenpool INTEGER,
-                            Note INTEGER,
-                            Kommentar TEXT,
+                            Themenpool INTEGER, Note INTEGER, Kommentar TEXT,
                             erstellt_am TEXT DEFAULT (datetime('now','localtime'))
-                        )`, () => {
-                            console.log('Alle Tabellen bereit (timer_status + Pruefungs_Auswertung)');
-                            initAlleTimer();
-                        });
+                        )`, () => { console.log('Alle Tabellen bereit'); initAlleTimer(); });
                     }
                 });
             });
@@ -79,76 +62,33 @@ const db = new sqlite3.Database(dbPath, (err) => {
     }
 });
 
-function nowTimeStr() {
-    const d = new Date();
-    return ('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2)+':'+('0'+d.getSeconds()).slice(-2);
-}
+function nowTimeStr() { const d=new Date(); return ('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2)+':'+('0'+d.getSeconds()).slice(-2); }
 
-// Bestehende Einträge werden NIE verändert!
 function initAlleTimer() {
     const alleKlassen = Object.values(klassen).flat();
-    const ph = alleKlassen.map(() => '?').join(',');
-    db.all(`SELECT rowid, klasse FROM termine WHERE klasse IN (${ph})`, alleKlassen, (err, rows) => {
-        if (err || !rows || !rows.length) { console.log('Timer-Init: keine Schüler'); return; }
+    const placeholders = alleKlassen.map(() => '?').join(',');
+    db.all(`SELECT rowid, klasse FROM termine WHERE klasse IN (${placeholders})`, alleKlassen, (err, rows) => {
+        if (err) { console.error('Fehler beim Timer-Init:', err.message); return; }
+        if (!rows || rows.length === 0) { console.log('Keine Schüler gefunden.'); return; }
         let neu = 0;
         const stmt = db.prepare(`INSERT OR IGNORE INTO timer_status (schueler_id, remaining_seconds, state, exam_remaining, exam_state) VALUES (?, ${VORBEREITUNGS_TIMER}, 'idle', ${PRUEFUNGS_TIMER}, 'idle')`);
-        rows.forEach(r => {
-            const z = zweigZuordnung[r.klasse]; if (!z) return;
-            stmt.run([z + '_' + r.rowid], function(e) { if (!e && this.changes > 0) neu++; });
-        });
-        stmt.finalize(() => console.log('Timer-Init: ' + rows.length + ' Schüler, ' + neu + ' neue. Bestehende unverändert.'));
+        rows.forEach(row => { const zweig = zweigZuordnung[row.klasse]; if (!zweig) return; stmt.run([zweig + '_' + row.rowid], function(err) { if (!err && this.changes > 0) neu++; }); });
+        stmt.finalize(() => { console.log('Timer-Init: ' + rows.length + ' Schüler, ' + neu + ' neue Einträge. Bestehende unverändert.'); });
     });
 }
 
 app.use(express.json());
-app.use(session({
-    secret: process.env.SESSION_SECRET || 'BITTE_IN_.env_SETZEN',
-    resave: false, saveUninitialized: false,
-    cookie: { secure: true, sameSite: 'lax' }
-}));
+app.use(session({ secret: process.env.SESSION_SECRET || 'BITTE_IN_.env_SETZEN', resave: false, saveUninitialized: false, cookie: { secure: true, sameSite: 'lax' } }));
+function requireAuth(req, res, next) { if (req.session && req.session.user) return next(); return res.redirect('/'); }
+function base64UrlDecode(str) { str = str.replace(/-/g, '+').replace(/_/g, '/'); while (str.length % 4) str += '='; return Buffer.from(str, 'base64').toString('utf8'); }
 
-function requireAuth(req, res, next) {
-    if (req.session && req.session.user) return next();
-    return res.redirect('/');
-}
-function base64UrlDecode(str) {
-    str = str.replace(/-/g, '+').replace(/_/g, '/');
-    while (str.length % 4) str += '=';
-    return Buffer.from(str, 'base64').toString('utf8');
-}
-
-const klassen = {
-    elektronik: ['5AHEL', '5BHEL', '5CHEL'],
-    elektrotechnik: ['5AHET', '5BHET', '5CHET'],
-    maschinenbau: ['5AHMBS', '5BHMBZ', '5VHMBS'],
-    wirtschaft: ['5AHWIE', '5BHWIE', '5DHWIE']
-};
+const klassen = { elektronik: ['5AHEL', '5BHEL', '5CHEL'], elektrotechnik: ['5AHET', '5BHET', '5CHET'], maschinenbau: ['5AHMBS', '5BHMBZ', '5VHMBS'], wirtschaft: ['5AHWIE', '5BHWIE', '5DHWIE'] };
 const zweigFarben = { elektronik: '#2d5016', elektrotechnik: '#e60505', maschinenbau: '#4f56d0', wirtschaft: '#ffeb3b' };
 const zweigNamen = { elektronik: 'Elektronik', elektrotechnik: 'Elektrotechnik', maschinenbau: 'Maschinenbau', wirtschaft: 'Wirtschaft' };
-const zweigZuordnung = {
-    '5AHEL': 'elektronik', '5BHEL': 'elektronik', '5CHEL': 'elektronik',
-    '5AHET': 'elektrotechnik', '5BHET': 'elektrotechnik', '5CHET': 'elektrotechnik',
-    '5AHMBS': 'maschinenbau', '5BHMBZ': 'maschinenbau', '5VHMBS': 'maschinenbau',
-    '5AHWIE': 'wirtschaft', '5BHWIE': 'wirtschaft', '5DHWIE': 'wirtschaft'
-};
+const zweigZuordnung = { '5AHEL': 'elektronik', '5BHEL': 'elektronik', '5CHEL': 'elektronik', '5AHET': 'elektrotechnik', '5BHET': 'elektrotechnik', '5CHET': 'elektrotechnik', '5AHMBS': 'maschinenbau', '5BHMBZ': 'maschinenbau', '5VHMBS': 'maschinenbau', '5AHWIE': 'wirtschaft', '5BHWIE': 'wirtschaft', '5DHWIE': 'wirtschaft' };
 
-function getKlassenStrukturAusDB() {
-    return new Promise((resolve) => {
-        db.all('SELECT DISTINCT klasse FROM termine WHERE klasse IS NOT NULL ORDER BY klasse', [], (err, rows) => {
-            if (err) return resolve(null);
-            const s = { elektronik: {}, elektrotechnik: {}, maschinenbau: {}, wirtschaft: {} };
-            rows.forEach(r => { const z = zweigZuordnung[r.klasse]; if (z) s[z][r.klasse] = []; });
-            resolve(s);
-        });
-    });
-}
-function getSchuelerFuerZweig(zweig) {
-    return new Promise((resolve) => {
-        const kl = klassen[zweig] || [];
-        if (!kl.length) return resolve([]);
-        db.all('SELECT rowid, * FROM termine WHERE klasse IN (' + kl.map(()=>'?').join(',') + ') ORDER BY klasse, nachname, vorname', kl, (err, rows) => resolve(err ? [] : rows));
-    });
-}
+function getKlassenStrukturAusDB() { return new Promise((resolve) => { db.all('SELECT DISTINCT klasse FROM termine WHERE klasse IS NOT NULL ORDER BY klasse', [], (err, rows) => { if (err) return resolve(null); const s = { elektronik: {}, elektrotechnik: {}, maschinenbau: {}, wirtschaft: {} }; rows.forEach(r => { const z = zweigZuordnung[r.klasse]; if (z) s[z][r.klasse] = []; }); resolve(s); }); }); }
+function getSchuelerFuerZweig(zweig) { return new Promise((resolve) => { const kl = klassen[zweig] || []; if (!kl.length) return resolve([]); const ph = kl.map(() => '?').join(','); db.all(`SELECT rowid, * FROM termine WHERE klasse IN (${ph}) ORDER BY klasse, nachname, vorname`, kl, (err, rows) => resolve(err ? [] : rows)); }); }
 
 // ==================== TIMER API ====================
 
@@ -158,104 +98,62 @@ app.get('/api/timer/:id', requireAuth, (req, res) => {
         if (err) return res.status(500).json({ error: err.message });
         if (!row) return res.json({ state: 'idle', remaining_seconds: VORBEREITUNGS_TIMER, exam_state: 'idle', exam_remaining: PRUEFUNGS_TIMER });
         const now = Date.now();
-        const result = {
-            state: row.state, remaining_seconds: row.remaining_seconds,
-            exam_state: row.exam_state || 'idle', exam_remaining: row.exam_remaining || PRUEFUNGS_TIMER,
-            note: row.note, themenpool: row.themenpool, kommentar: row.kommentar, zeit_differenz: row.zeit_differenz
-        };
-        if (row.state === 'running' && row.started_at) {
-            result.remaining_seconds = Math.max(0, row.remaining_seconds - (now - row.started_at) / 1000);
-            if (result.remaining_seconds <= 0) result.state = 'prep_done';
-        }
-        if (row.exam_state === 'running' && row.exam_started_at) {
-            result.exam_remaining = row.exam_remaining - (now - row.exam_started_at) / 1000;
-        }
+        const result = { state: row.state, remaining_seconds: row.remaining_seconds, exam_state: row.exam_state || 'idle', exam_remaining: row.exam_remaining || PRUEFUNGS_TIMER, note: row.note, themenpool: row.themenpool, kommentar: row.kommentar, zeit_differenz: row.zeit_differenz };
+        if (row.state === 'running' && row.started_at) { const elapsed = (now - row.started_at) / 1000; result.remaining_seconds = Math.max(0, row.remaining_seconds - elapsed); if (result.remaining_seconds <= 0) result.state = 'prep_done'; }
+        if (row.exam_state === 'running' && row.exam_started_at) { result.exam_remaining = row.exam_remaining - (now - row.exam_started_at) / 1000; }
         res.json(result);
     });
 });
 
 app.post('/api/timer/:id/start', requireAuth, (req, res) => {
-    const id = req.params.id, now = Date.now(), ts = nowTimeStr();
-    db.run(`INSERT INTO timer_status (schueler_id, started_at, remaining_seconds, state, v_start_real) VALUES (?, ?, ${VORBEREITUNGS_TIMER}, 'running', ?)
-                ON CONFLICT(schueler_id) DO UPDATE SET started_at=?, remaining_seconds=${VORBEREITUNGS_TIMER}, state='running', paused_at=NULL, v_start_real=?`,
-        [id, now, ts, now, ts], (err) => {
-            if (err) return res.status(500).json({ error: err.message });
-            res.json({ ok: true });
-        });
+    const id = req.params.id; const now = Date.now(); const ts = nowTimeStr();
+    db.run(`INSERT INTO timer_status (schueler_id, started_at, remaining_seconds, state, v_start_real) VALUES (?, ?, ${VORBEREITUNGS_TIMER}, 'running', ?) ON CONFLICT(schueler_id) DO UPDATE SET started_at=?, remaining_seconds=${VORBEREITUNGS_TIMER}, state='running', paused_at=NULL, v_start_real=?`,
+        [id, now, ts, now, ts], (err) => { if (err) return res.status(500).json({ error: err.message }); res.json({ ok: true }); });
 });
 
 app.post('/api/timer/:id/pause', requireAuth, (req, res) => {
-    const id = req.params.id, { remaining_seconds } = req.body;
-    db.run("UPDATE timer_status SET state='paused', paused_at=?, remaining_seconds=?, started_at=NULL WHERE schueler_id=?",
-        [Date.now(), remaining_seconds, id], (err) => {
-            if (err) return res.status(500).json({ error: err.message });
-            res.json({ ok: true });
-        });
+    const id = req.params.id; const { remaining_seconds } = req.body;
+    db.run(`UPDATE timer_status SET state='paused', paused_at=?, remaining_seconds=?, started_at=NULL WHERE schueler_id=?`, [Date.now(), remaining_seconds, id], (err) => { if (err) return res.status(500).json({ error: err.message }); res.json({ ok: true }); });
 });
 
 app.post('/api/timer/:id/resume', requireAuth, (req, res) => {
-    const id = req.params.id, now = Date.now();
-    db.run("UPDATE timer_status SET state='running', started_at=?, paused_at=NULL WHERE schueler_id=?", [now, id], (err) => {
-        if (err) return res.status(500).json({ error: err.message });
-        res.json({ ok: true });
-    });
+    const id = req.params.id; const now = Date.now();
+    db.run(`UPDATE timer_status SET state='running', started_at=?, paused_at=NULL WHERE schueler_id=?`, [now, id], (err) => { if (err) return res.status(500).json({ error: err.message }); res.json({ ok: true }); });
 });
 
 app.post('/api/timer/:id/reset', requireAuth, (req, res) => {
     const id = req.params.id;
-    db.run(`UPDATE timer_status SET state='idle', started_at=NULL, paused_at=NULL, remaining_seconds=${VORBEREITUNGS_TIMER},
-                                    exam_state='idle', exam_started_at=NULL, exam_remaining=${PRUEFUNGS_TIMER},
-                                    note=NULL, themenpool=NULL, kommentar=NULL, zeit_differenz=NULL, v_start_real=NULL, exam_start_real=NULL WHERE schueler_id=?`,
-        [id], (err) => {
-            if (err) return res.status(500).json({ error: err.message });
-            res.json({ ok: true });
-        });
+    db.run(`UPDATE timer_status SET state='idle', started_at=NULL, paused_at=NULL, remaining_seconds=${VORBEREITUNGS_TIMER}, exam_state='idle', exam_started_at=NULL, exam_remaining=${PRUEFUNGS_TIMER}, note=NULL, themenpool=NULL, kommentar=NULL, zeit_differenz=NULL, v_start_real=NULL, exam_start_real=NULL WHERE schueler_id=?`,
+        [id], (err) => { if (err) return res.status(500).json({ error: err.message }); res.json({ ok: true }); });
 });
 
 app.post('/api/timer/:id/prep_done', requireAuth, (req, res) => {
     const id = req.params.id;
-    db.run("INSERT INTO timer_status (schueler_id, state, remaining_seconds) VALUES (?, 'prep_done', 0) ON CONFLICT(schueler_id) DO UPDATE SET state='prep_done', remaining_seconds=0, started_at=NULL, paused_at=NULL",
-        [id], (err) => {
-            if (err) return res.status(500).json({ error: err.message });
-            res.json({ ok: true });
-        });
+    db.run(`INSERT INTO timer_status (schueler_id, state, remaining_seconds) VALUES (?, 'prep_done', 0) ON CONFLICT(schueler_id) DO UPDATE SET state='prep_done', remaining_seconds=0, started_at=NULL, paused_at=NULL`, [id], (err) => { if (err) return res.status(500).json({ error: err.message }); res.json({ ok: true }); });
 });
 
 app.post('/api/timer/:id/exam_start', requireAuth, (req, res) => {
-    const id = req.params.id, now = Date.now(), ts = nowTimeStr();
-    db.run(`UPDATE timer_status SET exam_state='running', exam_started_at=?, exam_remaining=${PRUEFUNGS_TIMER}, exam_start_real=? WHERE schueler_id=?`,
-        [now, ts, id], (err) => {
-            if (err) return res.status(500).json({ error: err.message });
-            res.json({ ok: true });
-        });
+    const id = req.params.id; const now = Date.now(); const ts = nowTimeStr();
+    db.run(`UPDATE timer_status SET exam_state='running', exam_started_at=?, exam_remaining=${PRUEFUNGS_TIMER}, exam_start_real=? WHERE schueler_id=?`, [now, ts, id], (err) => { if (err) return res.status(500).json({ error: err.message }); res.json({ ok: true }); });
 });
 
 app.post('/api/timer/:id/exam_pause', requireAuth, (req, res) => {
-    const id = req.params.id, { exam_remaining } = req.body;
-    db.run("UPDATE timer_status SET exam_state='paused', exam_started_at=NULL, exam_remaining=? WHERE schueler_id=?",
-        [exam_remaining, id], (err) => {
-            if (err) return res.status(500).json({ error: err.message });
-            res.json({ ok: true });
-        });
+    const id = req.params.id; const { exam_remaining } = req.body;
+    db.run(`UPDATE timer_status SET exam_state='paused', exam_started_at=NULL, exam_remaining=? WHERE schueler_id=?`, [exam_remaining, id], (err) => { if (err) return res.status(500).json({ error: err.message }); res.json({ ok: true }); });
 });
 
 app.post('/api/timer/:id/exam_resume', requireAuth, (req, res) => {
-    const id = req.params.id, now = Date.now();
-    db.run("UPDATE timer_status SET exam_state='running', exam_started_at=? WHERE schueler_id=?", [now, id], (err) => {
-        if (err) return res.status(500).json({ error: err.message });
-        res.json({ ok: true });
-    });
+    const id = req.params.id; const now = Date.now();
+    db.run(`UPDATE timer_status SET exam_state='running', exam_started_at=? WHERE schueler_id=?`, [now, id], (err) => { if (err) return res.status(500).json({ error: err.message }); res.json({ ok: true }); });
 });
 
 app.post('/api/timer/:id/exam_finish', requireAuth, (req, res) => {
     const id = req.params.id;
     const { note, themenpool, kommentar, zeit_differenz } = req.body;
     if (!note || !themenpool) return res.status(400).json({ error: 'Note und Themenpool sind Pflicht' });
-    // 1) timer_status updaten
-    db.run("UPDATE timer_status SET exam_state='done', note=?, themenpool=?, kommentar=?, zeit_differenz=? WHERE schueler_id=?",
+    db.run(`UPDATE timer_status SET exam_state='done', note=?, themenpool=?, kommentar=?, zeit_differenz=? WHERE schueler_id=?`,
         [note, themenpool, kommentar || '', zeit_differenz, id], (err) => {
             if (err) return res.status(500).json({ error: err.message });
-            // 2) Pruefungs_Auswertung schreiben
             const rowid = id.split('_').slice(1).join('_');
             db.get('SELECT * FROM termine WHERE rowid=?', [rowid], (e2, sch) => {
                 db.get('SELECT v_start_real, exam_start_real FROM timer_status WHERE schueler_id=?', [id], (e3, ts) => {
@@ -265,15 +163,9 @@ app.post('/api/timer/:id/exam_finish', requireAuth, (req, res) => {
                         const mStr = ('0'+m).slice(-2) + ':' + ('0'+s).slice(-2);
                         ueberzug = zeit_differenz > 0 ? '-' + mStr : (zeit_differenz < 0 ? '+' + mStr : '00:00');
                     }
-                    db.run(`INSERT INTO Pruefungs_Auswertung (schueler_id, Klasse, Nachname, Name, V_start_geplant, V_start_real, Exam_start_geplant, Exam_start_real, Pruefungsueberzug, Themenpool, Note, Kommentar) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
-                        [id, sch ? sch.klasse : '', sch ? sch.nachname : '', sch ? sch.vorname : '',
-                            sch ? (sch.prep_start || sch.rep_start || '') : '', ts ? ts.v_start_real : '',
-                            sch ? (sch.exam_start || '') : '', ts ? ts.exam_start_real : '',
-                            ueberzug, themenpool, note, kommentar || ''],
-                        (e4) => {
-                            if (e4) console.error('Pruefungs_Auswertung Fehler:', e4.message);
-                            else console.log('Pruefungs_Auswertung gespeichert:', id);
-                        });
+                    db.run(`INSERT INTO Pruefungs_Auswertung (schueler_id,Klasse,Nachname,Name,V_start_geplant,V_start_real,Exam_start_geplant,Exam_start_real,Pruefungsueberzug,Themenpool,Note,Kommentar) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+                        [id, sch?sch.klasse:'', sch?sch.nachname:'', sch?sch.vorname:'', sch?(sch.prep_start||sch.rep_start||''):'', ts?ts.v_start_real:'', sch?(sch.exam_start||''):'', ts?ts.exam_start_real:'', ueberzug, themenpool, note, kommentar||''],
+                        (e4) => { if(e4) console.error('Pruefungs_Auswertung Fehler:', e4.message); else console.log('Pruefungs_Auswertung gespeichert:', id); });
                     res.json({ ok: true });
                 });
             });
@@ -284,20 +176,11 @@ app.get('/api/timers/:zweig', requireAuth, (req, res) => {
     const zweig = req.params.zweig.toLowerCase();
     db.all('SELECT * FROM timer_status WHERE schueler_id LIKE ?', [`${zweig}_%`], (err, rows) => {
         if (err) return res.status(500).json({ error: err.message });
-        const timers = {}, now = Date.now();
+        const timers = {}; const now = Date.now();
         (rows || []).forEach(row => {
-            const t = {
-                state: row.state, remaining_seconds: row.remaining_seconds,
-                exam_state: row.exam_state || 'idle', exam_remaining: row.exam_remaining || PRUEFUNGS_TIMER,
-                note: row.note, themenpool: row.themenpool, kommentar: row.kommentar, zeit_differenz: row.zeit_differenz
-            };
-            if (row.state === 'running' && row.started_at) {
-                t.remaining_seconds = Math.max(0, row.remaining_seconds - (now - row.started_at) / 1000);
-                if (t.remaining_seconds <= 0) t.state = 'prep_done';
-            }
-            if (row.exam_state === 'running' && row.exam_started_at) {
-                t.exam_remaining = row.exam_remaining - (now - row.exam_started_at) / 1000;
-            }
+            const t = { state: row.state, remaining_seconds: row.remaining_seconds, exam_state: row.exam_state || 'idle', exam_remaining: row.exam_remaining || PRUEFUNGS_TIMER, note: row.note, themenpool: row.themenpool, kommentar: row.kommentar, zeit_differenz: row.zeit_differenz };
+            if (row.state === 'running' && row.started_at) { const el = (now - row.started_at) / 1000; t.remaining_seconds = Math.max(0, row.remaining_seconds - el); if (t.remaining_seconds <= 0) t.state = 'prep_done'; }
+            if (row.exam_state === 'running' && row.exam_started_at) { t.exam_remaining = row.exam_remaining - (now - row.exam_started_at) / 1000; }
             timers[row.schueler_id] = t;
         });
         res.json(timers);
@@ -313,19 +196,13 @@ app.get('/api/next-exam', requireAuth, (req, res) => {
             const tMap = {}; (timers || []).forEach(t => tMap[t.schueler_id] = t);
             res.json((rows || []).map(s => {
                 const z = zweigZuordnung[s.klasse] || '', sid = z + '_' + s.rowid, ts = tMap[sid];
-                return {
-                    sid, vorname: s.vorname||'', nachname: s.nachname||'', klasse: s.klasse||'',
-                    fach: s.fach||'', pruefer: s.pruefer||'', datum: s.datum||'',
-                    prep_start: s.prep_start || s.rep_start || '', exam_start: s.exam_start||'', zweig: z,
-                    farbe: zweigFarben[z]||'#333', textFarbe: (z==='elektrotechnik'||z==='wirtschaft') ? '#333' : 'white',
-                    state: ts ? ts.state : 'idle', exam_state: ts ? ts.exam_state : 'idle'
-                };
+                return { sid, vorname: s.vorname||'', nachname: s.nachname||'', klasse: s.klasse||'', fach: s.fach||'', pruefer: s.pruefer||'', datum: s.datum||'', prep_start: s.prep_start||s.rep_start||'', exam_start: s.exam_start||'', zweig: z, farbe: zweigFarben[z]||'#333', textFarbe: (z==='elektrotechnik'||z==='wirtschaft')?'#333':'white', state: ts?ts.state:'idle', exam_state: ts?ts.exam_state:'idle' };
             }));
         });
     });
 });
 
-// ==================== GLOBALES WIDGET (HTML+CSS+JS) ====================
+// ==================== GLOBALES WIDGET (1 Popup für Home + Zweig) ====================
 function globalWidgetHtml() {
     return `
 <div class="next-exam-widget" id="nextExamWidget">
@@ -375,26 +252,16 @@ function globalWidgetHtml() {
   header.addEventListener('touchstart',function(e){if(e.target===togBtn)return;drag=true;var t=e.touches[0],r=w.getBoundingClientRect();ox=t.clientX-r.left;oy=t.clientY-r.top;w.style.transition='none';},{passive:true});
   document.addEventListener('touchmove',function(e){if(!drag)return;var t=e.touches[0];w.style.left=Math.max(0,Math.min(innerWidth-w.offsetWidth,t.clientX-ox))+'px';w.style.top=Math.max(0,Math.min(innerHeight-w.offsetHeight,t.clientY-oy))+'px';w.style.right='auto';},{passive:true});
   document.addEventListener('touchend',function(){if(drag){drag=false;w.style.transition='';}});
-
-  function pdt(datum,zeit){
-    if(!datum||!zeit)return null;
-    var dm=datum.match(/(\\d{2})\\.(\\d{2})\\.(\\d{4})/);if(!dm)return null;
-    var tm=zeit.match(/(\\d{1,2}):(\\d{2})/);if(!tm)return null;
-    return new Date(parseInt(dm[3]),parseInt(dm[2])-1,parseInt(dm[1]),parseInt(tm[1]),parseInt(tm[2]),0);
-  }
+  function pdt(datum,zeit){if(!datum||!zeit)return null;var dm=datum.match(/(\\d{2})\\.(\\d{2})\\.(\\d{4})/);if(!dm)return null;var tm=zeit.match(/(\\d{1,2}):(\\d{2})/);if(!tm)return null;return new Date(parseInt(dm[3]),parseInt(dm[2])-1,parseInt(dm[1]),parseInt(tm[1]),parseInt(tm[2]),0);}
   function fcd(ms){var neg=ms<0;ms=Math.abs(ms);var sec=Math.floor(ms/1000),h=Math.floor(sec/3600),m=Math.floor((sec%3600)/60),s=sec%60;var str='';if(h>0)str+=h+'h ';str+=(m<10?'0':'')+m+':'+(s<10?'0':'')+s;return(neg?'-':'')+str;}
-
   var allData=null;
   function loadData(){fetch('/api/next-exam').then(function(r){return r.json();}).then(function(d){allData=d;}).catch(function(){});}
-
   function update(){
-    if(isC||!allData)return;
-    var now=new Date(),best=null,bestDiff=Infinity;
+    if(isC||!allData)return;var now=new Date(),best=null,bestDiff=Infinity;
     allData.forEach(function(s){
       if(s.state==='running'||s.state==='paused'||s.state==='prep_done')return;
       if(s.exam_state==='running'||s.exam_state==='paused'||s.exam_state==='done')return;
-      var pt=pdt(s.datum,s.prep_start);if(!pt)return;
-      var diff=pt.getTime()-now.getTime();
+      var pt=pdt(s.datum,s.prep_start);if(!pt)return;var diff=pt.getTime()-now.getTime();
       if(diff>-7200000&&diff<bestDiff){bestDiff=diff;best={s:s,diff:diff};}
     });
     if(!best){content.innerHTML='<div class="nex-done">Keine weiteren Pr\\u00fcfungen</div>';return;}
@@ -413,23 +280,13 @@ function globalWidgetHtml() {
 app.get('/debug/db', requireAuth, (req, res) => {
     db.all("SELECT name FROM sqlite_master WHERE type='table'", [], (err, tables) => {
         if (err) return res.status(500).json({ error: err.message });
-        Promise.all(tables.map(t => new Promise(r => db.all('SELECT * FROM ' + t.name + ' LIMIT 10', [], (e, rows) => r(e ? { table: t.name, error: e.message } : { table: t.name, rows }))))).then(results => res.json({ database: dbPath, tables: results }));
+        const promises = tables.map(table => new Promise((resolve) => { db.all(`SELECT * FROM ${table.name} LIMIT 5`, [], (err, rows) => { resolve(err ? { table: table.name, error: err.message } : { table: table.name, rows }); }); }));
+        Promise.all(promises).then(results => res.json({ database: dbPath, tables: results }));
     });
 });
 
-app.get('/klassenstruktur', requireAuth, async (req, res) => {
-    try { const s = await getKlassenStrukturAusDB(); res.json(s || { fallback: klassen }); }
-    catch (e) { res.status(500).json({ error: e.message }); }
-});
-
-app.get('/zweige', requireAuth, async (req, res) => {
-    try {
-        const s = await getKlassenStrukturAusDB();
-        if (!s) return res.json({ zweige: Object.keys(klassen), klassen });
-        const r = {}; for (const [z, k] of Object.entries(s)) r[z] = Object.keys(k);
-        res.json(r);
-    } catch (e) { res.status(500).json({ error: e.message }); }
-});
+app.get('/klassenstruktur', requireAuth, async (req, res) => { try { const s = await getKlassenStrukturAusDB(); res.json(s || { fallback: klassen }); } catch (e) { res.status(500).json({ error: e.message }); } });
+app.get('/zweige', requireAuth, async (req, res) => { try { const s = await getKlassenStrukturAusDB(); if (!s) return res.json({ zweige: Object.keys(klassen), klassen }); const r = {}; for (const [z, k] of Object.entries(s)) r[z] = Object.keys(k); res.json(r); } catch (e) { res.status(500).json({ error: e.message }); } });
 
 app.get('/', (req, res) => {
     if (req.session && req.session.user) return res.redirect('/home');
@@ -519,96 +376,45 @@ app.get('/zweig/:zweig', requireAuth, async (req, res) => {
 
         res.send(`<!DOCTYPE html><html lang="de"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${name} - Schülerübersicht</title>
 <style>
-*{margin:0;padding:0;box-sizing:border-box}
-body{font-family:Arial,sans-serif;background:#07175e;min-height:100vh;padding:40px 20px}
+*{margin:0;padding:0;box-sizing:border-box}body{font-family:Arial,sans-serif;background:#07175e;min-height:100vh;padding:40px 20px}
 .container{background:#fff;border-radius:20px;padding:60px;box-shadow:0 20px 60px rgba(0,0,0,.3);max-width:1050px;margin:0 auto}
 .back-button{display:inline-block;margin-bottom:30px;padding:12px 25px;background:#666;color:#fff;text-decoration:none;border-radius:8px;transition:background .3s}.back-button:hover{background:#444}
 .zweig-badge{display:inline-block;padding:30px 60px;background:${farbe};color:${tf};font-size:3em;font-weight:700;border-radius:15px;margin:30px 0;box-shadow:0 10px 30px rgba(0,0,0,.2)}
-h1{color:#333;font-size:2em;margin-top:20px;text-align:center}
-p.subtitle{color:#666;font-size:1.2em;margin-top:20px;text-align:center}
+h1{color:#333;font-size:2em;margin-top:20px;text-align:center}p.subtitle{color:#666;font-size:1.2em;margin-top:20px;text-align:center}
 .schueler-liste{margin-top:40px}
 .schueler-item{position:relative;margin:15px 0;border-radius:12px;border-left:5px solid ${farbe};box-shadow:0 2px 5px rgba(0,0,0,.1);cursor:pointer;overflow:hidden;transition:box-shadow .3s,transform .2s}
-.schueler-item:hover{transform:translateX(5px);box-shadow:0 4px 12px rgba(0,0,0,.15)}
-.schueler-item.expanded{transform:none;box-shadow:0 6px 25px rgba(0,0,0,.2)}
-.timer-progress-bg{position:absolute;top:0;left:0;height:100%;width:0%;z-index:0;pointer-events:none;transition:width .8s linear}
-.card-content{position:relative;z-index:1;padding:20px}
+.schueler-item:hover{transform:translateX(5px);box-shadow:0 4px 12px rgba(0,0,0,.15)}.schueler-item.expanded{transform:none;box-shadow:0 6px 25px rgba(0,0,0,.2)}
+.timer-progress-bg{position:absolute;top:0;left:0;height:100%;width:0%;z-index:0;pointer-events:none;transition:width .8s linear}.card-content{position:relative;z-index:1;padding:20px}
 .schueler-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:10px}
-.schueler-name-container{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
-.schueler-name{font-weight:700;font-size:1.3em;color:#222}
+.schueler-name-container{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.schueler-name{font-weight:700;font-size:1.3em;color:#222}
 .klassen-badge{background:${farbe};color:${tf};padding:4px 12px;border-radius:15px;font-size:.8em;font-weight:700}
 .schueler-datum{background:${farbe};color:${tf};padding:5px 15px;border-radius:20px;font-size:.9em;font-weight:700}
-.schueler-details{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;margin-top:10px}
-.detail-item{color:#444;font-size:.95em;padding:5px}.dl{font-weight:700;color:#222}
-.timer-badge{display:none;padding:4px 14px;border-radius:15px;font-size:.85em;font-weight:700}
-.timer-badge.visible{display:inline-block}
-.timer-badge.st-prep{background:#ffe0cc;color:#c0392b}.timer-badge.st-paused{background:#ff9800;color:#fff}
-.timer-badge.st-prep-done{background:#ff9800;color:#fff}.timer-badge.st-exam{background:#fff3cd;color:#856404}
-.timer-badge.st-done{background:#4caf50;color:#fff}
-.expand-hint{text-align:right;font-size:.8em;color:#aaa;margin-top:8px}
-.schueler-item.expanded .expand-hint{opacity:0;height:0;margin:0;overflow:hidden}
-.expanded-section{max-height:0;overflow:hidden;transition:max-height .4s ease}
-.schueler-item.expanded .expanded-section{max-height:800px}
+.schueler-details{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;margin-top:10px}.detail-item{color:#444;font-size:.95em;padding:5px}.dl{font-weight:700;color:#222}
+.timer-badge{display:none;padding:4px 14px;border-radius:15px;font-size:.85em;font-weight:700}.timer-badge.visible{display:inline-block}
+.timer-badge.st-prep{background:#ffe0cc;color:#c0392b}.timer-badge.st-paused{background:#ff9800;color:#fff}.timer-badge.st-prep-done{background:#ff9800;color:#fff}.timer-badge.st-exam{background:#fff3cd;color:#856404}.timer-badge.st-done{background:#4caf50;color:#fff}
+.expand-hint{text-align:right;font-size:.8em;color:#aaa;margin-top:8px}.schueler-item.expanded .expand-hint{opacity:0;height:0;margin:0;overflow:hidden}
+.expanded-section{max-height:0;overflow:hidden;transition:max-height .4s ease}.schueler-item.expanded .expanded-section{max-height:800px}
 .expanded-content{border-top:2px solid rgba(0,0,0,.08);padding-top:20px;margin-top:15px}
-.timer-display{text-align:center;margin-bottom:15px}
-.timer-time{font-size:2.8em;font-weight:700;color:#222;font-variant-numeric:tabular-nums;letter-spacing:3px}
-.timer-label{font-size:.95em;color:#555;margin-top:4px}.timer-over{color:#c0392b;font-weight:700}
+.timer-display{text-align:center;margin-bottom:15px}.timer-time{font-size:2.8em;font-weight:700;color:#222;font-variant-numeric:tabular-nums;letter-spacing:3px}.timer-label{font-size:.95em;color:#555;margin-top:4px}.timer-over{color:#c0392b;font-weight:700}
 .timer-buttons{display:flex;gap:12px;justify-content:center;flex-wrap:wrap;margin-top:10px}
-.timer-btn{padding:12px 28px;border:none;border-radius:10px;font-size:1.05em;font-weight:700;cursor:pointer;transition:all .2s;box-shadow:0 3px 8px rgba(0,0,0,.15)}
-.timer-btn:hover{transform:translateY(-2px);box-shadow:0 5px 15px rgba(0,0,0,.25)}.timer-btn:active{transform:translateY(0)}
-.btn-start{background:#f0c230;color:#333}.btn-start:hover{background:#e6b420}
-.btn-pause{background:#ff9800;color:#fff}.btn-pause:hover{background:#e68900}
-.btn-resume{background:#4caf50;color:#fff}.btn-resume:hover{background:#43a047}
-.btn-reset{background:#f44336;color:#fff}.btn-reset:hover{background:#d32f2f}
-.btn-skip{background:#9c27b0;color:#fff}.btn-skip:hover{background:#7b1fa2}
-.btn-exam{background:#2196f3;color:#fff}.btn-exam:hover{background:#1976d2}
-.btn-finish{background:#4caf50;color:#fff}.btn-finish:hover{background:#388e3c}
-.btn-finish:disabled{background:#ccc;color:#888;cursor:not-allowed;transform:none;box-shadow:none}
-.exam-form{margin-top:20px;padding:20px;background:rgba(255,255,255,.8);border-radius:10px;border:2px solid #e0e0e0}
-.exam-form h3{margin-bottom:15px;color:#333;text-align:center;font-size:1.2em}
-.form-row{display:flex;gap:15px;margin-bottom:12px;align-items:center;flex-wrap:wrap}
-.form-row label{font-weight:700;min-width:120px;color:#333}
-.form-row select,.form-row textarea{padding:8px 12px;border:2px solid #ddd;border-radius:8px;font-size:1em;transition:border .2s}
-.form-row select:focus,.form-row textarea:focus{border-color:#2196f3;outline:none}
-.form-row select{min-width:100px}.form-row textarea{flex:1;min-height:60px;resize:vertical}
-.pflicht{color:#c0392b;font-size:.8em;margin-left:4px}
-.zeit-info{text-align:center;margin:15px 0;padding:10px;border-radius:8px;font-weight:700;font-size:1.1em}
-.zeit-info.over{background:#ffebee;color:#c0392b}.zeit-info.under{background:#e8f5e9;color:#2e7d32}
-.done-card{text-align:center;padding:20px}.done-card h3{color:#4caf50;margin-bottom:10px;font-size:1.3em}
-.done-info{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:15px;text-align:left}
-.done-info div{padding:8px;background:rgba(0,0,0,.03);border-radius:6px}
-.confirm-overlay{display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,.5);z-index:1000;justify-content:center;align-items:center}
-.confirm-overlay.active{display:flex}
-.confirm-box{background:#fff;border-radius:15px;padding:30px 40px;max-width:400px;text-align:center;box-shadow:0 10px 40px rgba(0,0,0,.3)}
-.confirm-box h3{margin-bottom:15px;color:#333}.confirm-box p{margin-bottom:20px;color:#666}
-.confirm-box .cbtns{display:flex;gap:10px;justify-content:center}
-.confirm-box .cbtns button{padding:10px 25px;border:none;border-radius:8px;font-size:1em;font-weight:700;cursor:pointer}
-.cbtn-yes{background:#f44336;color:#fff}.cbtn-no{background:#9e9e9e;color:#fff}
+.timer-btn{padding:12px 28px;border:none;border-radius:10px;font-size:1.05em;font-weight:700;cursor:pointer;transition:all .2s;box-shadow:0 3px 8px rgba(0,0,0,.15)}.timer-btn:hover{transform:translateY(-2px);box-shadow:0 5px 15px rgba(0,0,0,.25)}.timer-btn:active{transform:translateY(0)}
+.btn-start{background:#f0c230;color:#333}.btn-start:hover{background:#e6b420}.btn-pause{background:#ff9800;color:#fff}.btn-pause:hover{background:#e68900}.btn-resume{background:#4caf50;color:#fff}.btn-resume:hover{background:#43a047}.btn-reset{background:#f44336;color:#fff}.btn-reset:hover{background:#d32f2f}.btn-skip{background:#9c27b0;color:#fff}.btn-skip:hover{background:#7b1fa2}.btn-exam{background:#2196f3;color:#fff}.btn-exam:hover{background:#1976d2}.btn-finish{background:#4caf50;color:#fff}.btn-finish:hover{background:#388e3c}.btn-finish:disabled{background:#ccc;color:#888;cursor:not-allowed;transform:none;box-shadow:none}
+.exam-form{margin-top:20px;padding:20px;background:rgba(255,255,255,.8);border-radius:10px;border:2px solid #e0e0e0}.exam-form h3{margin-bottom:15px;color:#333;text-align:center;font-size:1.2em}
+.form-row{display:flex;gap:15px;margin-bottom:12px;align-items:center;flex-wrap:wrap}.form-row label{font-weight:700;min-width:120px;color:#333}.form-row select,.form-row textarea{padding:8px 12px;border:2px solid #ddd;border-radius:8px;font-size:1em;transition:border .2s}.form-row select:focus,.form-row textarea:focus{border-color:#2196f3;outline:none}.form-row select{min-width:100px}.form-row textarea{flex:1;min-height:60px;resize:vertical}.pflicht{color:#c0392b;font-size:.8em;margin-left:4px}
+.zeit-info{text-align:center;margin:15px 0;padding:10px;border-radius:8px;font-weight:700;font-size:1.1em}.zeit-info.over{background:#ffebee;color:#c0392b}.zeit-info.under{background:#e8f5e9;color:#2e7d32}
+.done-card{text-align:center;padding:20px}.done-card h3{color:#4caf50;margin-bottom:10px;font-size:1.3em}.done-info{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:15px;text-align:left}.done-info div{padding:8px;background:rgba(0,0,0,.03);border-radius:6px}
+.confirm-overlay{display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,.5);z-index:10000;justify-content:center;align-items:center}.confirm-overlay.active{display:flex}.confirm-box{background:#fff;border-radius:15px;padding:30px 40px;max-width:400px;text-align:center;box-shadow:0 10px 40px rgba(0,0,0,.3)}.confirm-box h3{margin-bottom:15px;color:#333}.confirm-box p{margin-bottom:20px;color:#666}.confirm-box .cbtns{display:flex;gap:10px;justify-content:center}.confirm-box .cbtns button{padding:10px 25px;border:none;border-radius:8px;font-size:1em;font-weight:700;cursor:pointer}.cbtn-yes{background:#f44336;color:#fff}.cbtn-no{background:#9e9e9e;color:#fff}
 @media(max-width:600px){.container{padding:30px 15px}.zweig-badge{padding:20px 30px;font-size:2em}.timer-time{font-size:2em}.timer-btn{padding:10px 18px;font-size:.95em}.form-row{flex-direction:column}.form-row label{min-width:auto}}
 </style></head><body>
 <div class="container">
   <a href="/home" class="back-button">Zurück zur Zweigauswahl</a>
-  <div style="text-align:center">
-    <div class="zweig-badge">${name}</div>
-    <h1>Zweig ${name}</h1>
+  <div style="text-align:center"><div class="zweig-badge">${name}</div><h1>Zweig ${name}</h1>
     ${schueler.length > 0 ? '<p class="subtitle">' + schueler.length + ' Schüler maturieren</p>' : '<p class="subtitle">Keine Schüler gefunden.</p>'}
   </div>
   ${schueler.length > 0 ? '<div class="schueler-liste">' + cardsHtml + '</div>' : ''}
 </div>
-
-<!-- Reset Confirm -->
-<div class="confirm-overlay" id="confirmOverlay">
-  <div class="confirm-box">
-    <h3>Wirklich zurücksetzen?</h3>
-    <p id="confirmText">Möchten Sie die Vorbereitungszeit für diesen Schüler wirklich zurücksetzen?</p>
-    <div class="cbtns">
-      <button class="cbtn-yes" id="confirmYes">Ja, zurücksetzen</button>
-      <button class="cbtn-no" id="confirmNo">Abbrechen</button>
-    </div>
-  </div>
-</div>
-
+<div class="confirm-overlay" id="confirmOverlay"><div class="confirm-box"><h3>Wirklich zurücksetzen?</h3><p id="confirmText">Möchten Sie die Vorbereitungszeit für diesen Schüler wirklich zurücksetzen?</p><div class="cbtns"><button class="cbtn-yes" id="confirmYes">Ja, zurücksetzen</button><button class="cbtn-no" id="confirmNo">Abbrechen</button></div></div></div>
 ${globalWidgetHtml()}
-
 <script>
 (function(){
 var PREP = ${VORBEREITUNGS_TIMER};
@@ -616,15 +422,8 @@ var EXAM = ${PRUEFUNGS_TIMER};
 var T = {};
 var lastRenderedState = {};
 
-function g(sid){
-  if(!T[sid]) T[sid]={state:'idle',rem:PREP,iid:null, examState:'idle',examRem:EXAM,eiid:null, note:null,themen:null,komm:'',zeitDiff:null};
-  return T[sid];
-}
-function fmt(s){
-  var neg=s<0; s=Math.abs(s);
-  var m=Math.floor(s/60),sc=Math.floor(s%60);
-  return(neg?'+':'')+(m<10?'0':'')+m+':'+(sc<10?'0':'')+sc;
-}
+function g(sid){ if(!T[sid]) T[sid]={state:'idle',rem:PREP,iid:null, examState:'idle',examRem:EXAM,eiid:null, note:null,themen:null,komm:'',zeitDiff:null}; return T[sid]; }
+function fmt(s){ var neg=s<0; s=Math.abs(s); var m=Math.floor(s/60),sc=Math.floor(s%60); return(neg?'+':'')+(m<10?'0':'')+m+':'+(sc<10?'0':'')+sc; }
 function prepColor(p){var r=Math.round(231+(255-231)*p);var gg=Math.round(76+(152-76)*p);var b=Math.round(60+(0-60)*p);return 'rgba('+r+','+gg+','+b+',0.4)';}
 function examColor(p){var r=Math.round(240+(76-240)*p);var gg=Math.round(194+(175-194)*p);var b=Math.round(48+(80-48)*p);return 'rgba('+r+','+gg+','+b+',0.45)';}
 function stateKey(sid){var t=g(sid);return t.state+'|'+t.examState;}
@@ -633,57 +432,20 @@ function tickUpdate(sid){
   var t=g(sid);var prog=document.getElementById('progress-'+sid);var badge=document.getElementById('badge-'+sid);
   var timeEl=document.querySelector('#expcontent-'+sid+' .timer-time');var labEl=document.querySelector('#expcontent-'+sid+' .timer-label');
   if(!prog) return;
-  if(t.state==='running'){
-    var p=Math.max(0,Math.min(1,1-(t.rem/PREP)));prog.style.width=(p*100)+'%';prog.style.backgroundColor=prepColor(p);
-    if(badge){badge.className='timer-badge visible st-prep';badge.textContent=fmt(t.rem)+' ⏱';}
-    if(timeEl) timeEl.textContent=fmt(t.rem);
-  } else if(t.examState==='running'){
-    var ep=t.examRem>=0?Math.max(0,Math.min(1,1-(t.examRem/EXAM))):1;prog.style.width=(ep*100)+'%';
-    prog.style.backgroundColor=t.examRem<0?'rgba(231,76,60,0.35)':examColor(ep);
-    if(badge){badge.className='timer-badge visible st-exam';badge.textContent=(t.examRem<0?'ÜBER ':'')+fmt(t.examRem)+' ⏱';}
-    if(timeEl){timeEl.textContent=(t.examRem<0?'+':'')+fmt(t.examRem);timeEl.style.color=t.examRem<0?'#c0392b':'#222';}
-    if(labEl){labEl.innerHTML=t.examRem<0?'<span class="timer-over">Prüfung überzogen!</span>':'Prüfung läuft...';}
-  }
+  if(t.state==='running'){var p=Math.max(0,Math.min(1,1-(t.rem/PREP)));prog.style.width=(p*100)+'%';prog.style.backgroundColor=prepColor(p);if(badge){badge.className='timer-badge visible st-prep';badge.textContent=fmt(t.rem)+' ⏱';}if(timeEl) timeEl.textContent=fmt(t.rem);}
+  else if(t.examState==='running'){var ep=t.examRem>=0?Math.max(0,Math.min(1,1-(t.examRem/EXAM))):1;prog.style.width=(ep*100)+'%';prog.style.backgroundColor=t.examRem<0?'rgba(231,76,60,0.35)':examColor(ep);if(badge){badge.className='timer-badge visible st-exam';badge.textContent=(t.examRem<0?'ÜBER ':'')+fmt(t.examRem)+' ⏱';}if(timeEl){timeEl.textContent=(t.examRem<0?'+':'')+fmt(t.examRem);timeEl.style.color=t.examRem<0?'#c0392b':'#222';}if(labEl){labEl.innerHTML=t.examRem<0?'<span class="timer-over">Prüfung überzogen!</span>':'Prüfung läuft...';}}
 }
 
 function render(sid){
-  var t=g(sid);var card=document.getElementById('card-'+sid);var prog=document.getElementById('progress-'+sid);
-  var badge=document.getElementById('badge-'+sid);var ec=document.getElementById('expcontent-'+sid);
-  if(!card||!ec) return;
-  lastRenderedState[sid]=stateKey(sid);var html='',p;
-  if(t.state==='idle'){
-    prog.style.width='0%';prog.style.backgroundColor='transparent';badge.className='timer-badge';
-    html='<div class="timer-display"><div class="timer-time">'+fmt(PREP)+'</div><div class="timer-label">Vorbereitung</div></div><div class="timer-buttons"><button class="timer-btn btn-start" data-action="start" data-sid="'+sid+'">Vorbereitung starten</button></div>';
-  } else if(t.state==='running'){
-    p=Math.max(0,Math.min(1,1-(t.rem/PREP)));prog.style.width=(p*100)+'%';prog.style.backgroundColor=prepColor(p);
-    badge.className='timer-badge visible st-prep';badge.textContent=fmt(t.rem)+' ⏱';
-    html='<div class="timer-display"><div class="timer-time">'+fmt(t.rem)+'</div><div class="timer-label">Vorbereitung läuft...</div></div><div class="timer-buttons"><button class="timer-btn btn-pause" data-action="pause" data-sid="'+sid+'">Pause</button><button class="timer-btn btn-skip" data-action="skip_prep" data-sid="'+sid+'">Überspringen ⏭</button><button class="timer-btn btn-reset" data-action="reset" data-sid="'+sid+'">Reset</button></div>';
-  } else if(t.state==='paused'){
-    p=Math.max(0,Math.min(1,1-(t.rem/PREP)));prog.style.width=(p*100)+'%';prog.style.backgroundColor=prepColor(p);
-    badge.className='timer-badge visible st-paused';badge.textContent=fmt(t.rem)+' ⏸';
-    html='<div class="timer-display"><div class="timer-time">'+fmt(t.rem)+'</div><div class="timer-label">Pausiert</div></div><div class="timer-buttons"><button class="timer-btn btn-resume" data-action="resume" data-sid="'+sid+'">Fortsetzen</button><button class="timer-btn btn-skip" data-action="skip_prep" data-sid="'+sid+'">Überspringen ⏭</button><button class="timer-btn btn-reset" data-action="reset" data-sid="'+sid+'">Reset</button></div>';
-  } else if(t.state==='prep_done'&&t.examState==='idle'){
-    prog.style.width='100%';prog.style.backgroundColor='rgba(255,152,0,0.45)';
-    badge.className='timer-badge visible st-prep-done';badge.textContent='Vorbereitung fertig ✓';
-    html='<div class="timer-display"><div class="timer-time" style="color:#e67e22">00:00</div><div class="timer-label" style="color:#e67e22;font-weight:700">Vorbereitung abgeschlossen! ✓</div></div><div class="timer-buttons"><button class="timer-btn btn-exam" data-action="exam_start" data-sid="'+sid+'">Prüfung starten</button></div>';
-  } else if(t.examState==='running'){
-    var ep=t.examRem>=0?Math.max(0,Math.min(1,1-(t.examRem/EXAM))):1;prog.style.width=(ep*100)+'%';
-    prog.style.backgroundColor=t.examRem<0?'rgba(231,76,60,0.35)':examColor(ep);
-    badge.className='timer-badge visible st-exam';badge.textContent=(t.examRem<0?'ÜBER ':'')+fmt(t.examRem)+' ⏱';
-    var ts=t.examRem<0?' style="color:#c0392b"':'';
-    html='<div class="timer-display"><div class="timer-time"'+ts+'>'+(t.examRem<0?'+':'')+fmt(t.examRem)+'</div><div class="timer-label">'+(t.examRem<0?'<span class="timer-over">Prüfung überzogen!</span>':'Prüfung läuft...')+'</div></div><div class="timer-buttons"><button class="timer-btn btn-pause" data-action="exam_pause" data-sid="'+sid+'">Pause</button></div>'+examFormHtml(sid,t);
-  } else if(t.examState==='paused'){
-    var ep2=t.examRem>=0?Math.max(0,Math.min(1,1-(t.examRem/EXAM))):1;prog.style.width=(ep2*100)+'%';
-    prog.style.backgroundColor=t.examRem<0?'rgba(231,76,60,0.35)':examColor(ep2);
-    badge.className='timer-badge visible st-paused';badge.textContent=fmt(t.examRem)+' ⏸';
-    html='<div class="timer-display"><div class="timer-time">'+fmt(t.examRem)+'</div><div class="timer-label">Prüfung pausiert</div></div><div class="timer-buttons"><button class="timer-btn btn-resume" data-action="exam_resume" data-sid="'+sid+'">Fortsetzen</button></div>'+examFormHtml(sid,t);
-  } else if(t.examState==='done'){
-    prog.style.width='100%';prog.style.backgroundColor='rgba(76,175,80,0.35)';
-    badge.className='timer-badge visible st-done';badge.textContent='Abgeschlossen ✓';
-    var zd=t.zeitDiff,zdText='',zdClass='';
-    if(zd!==null&&zd!==undefined){if(zd>0){zdText=fmt(zd)+' früher fertig';zdClass='under';}else if(zd<0){zdText=fmt(Math.abs(zd))+' überzogen';zdClass='over';}else{zdText='Genau in der Zeit';zdClass='under';}}
-    html='<div class="done-card"><h3 style="color:#4caf50">Prüfung abgeschlossen ✓</h3>'+(zdText?'<div class="zeit-info '+zdClass+'">'+zdText+'</div>':'')+'<div class="done-info"><div><span class="dl">Note:</span> '+t.note+'</div><div><span class="dl">Themenpool:</span> '+t.themen+'</div>'+(t.komm?'<div style="grid-column:1/-1"><span class="dl">Kommentar:</span> '+t.komm+'</div>':'')+'</div></div>';
-  }
+  var t=g(sid);var card=document.getElementById('card-'+sid);var prog=document.getElementById('progress-'+sid);var badge=document.getElementById('badge-'+sid);var ec=document.getElementById('expcontent-'+sid);
+  if(!card||!ec) return; lastRenderedState[sid]=stateKey(sid);var html='';var p;
+  if(t.state==='idle'){prog.style.width='0%';prog.style.backgroundColor='transparent';badge.className='timer-badge';html='<div class="timer-display"><div class="timer-time">'+fmt(PREP)+'</div><div class="timer-label">Vorbereitung</div></div><div class="timer-buttons"><button class="timer-btn btn-start" data-action="start" data-sid="'+sid+'">Vorbereitung starten</button></div>';}
+  else if(t.state==='running'){p=Math.max(0,Math.min(1,1-(t.rem/PREP)));prog.style.width=(p*100)+'%';prog.style.backgroundColor=prepColor(p);badge.className='timer-badge visible st-prep';badge.textContent=fmt(t.rem)+' ⏱';html='<div class="timer-display"><div class="timer-time">'+fmt(t.rem)+'</div><div class="timer-label">Vorbereitung läuft...</div></div><div class="timer-buttons"><button class="timer-btn btn-pause" data-action="pause" data-sid="'+sid+'">Pause</button><button class="timer-btn btn-skip" data-action="skip_prep" data-sid="'+sid+'">Überspringen ⏭</button><button class="timer-btn btn-reset" data-action="reset" data-sid="'+sid+'">Reset</button></div>';}
+  else if(t.state==='paused'){p=Math.max(0,Math.min(1,1-(t.rem/PREP)));prog.style.width=(p*100)+'%';prog.style.backgroundColor=prepColor(p);badge.className='timer-badge visible st-paused';badge.textContent=fmt(t.rem)+' ⏸';html='<div class="timer-display"><div class="timer-time">'+fmt(t.rem)+'</div><div class="timer-label">Pausiert</div></div><div class="timer-buttons"><button class="timer-btn btn-resume" data-action="resume" data-sid="'+sid+'">Fortsetzen</button><button class="timer-btn btn-skip" data-action="skip_prep" data-sid="'+sid+'">Überspringen ⏭</button><button class="timer-btn btn-reset" data-action="reset" data-sid="'+sid+'">Reset</button></div>';}
+  else if(t.state==='prep_done'&&t.examState==='idle'){prog.style.width='100%';prog.style.backgroundColor='rgba(255,152,0,0.45)';badge.className='timer-badge visible st-prep-done';badge.textContent='Vorbereitung fertig ✓';html='<div class="timer-display"><div class="timer-time" style="color:#e67e22">00:00</div><div class="timer-label" style="color:#e67e22;font-weight:700">Vorbereitung abgeschlossen! ✓</div></div><div class="timer-buttons"><button class="timer-btn btn-exam" data-action="exam_start" data-sid="'+sid+'">Prüfung starten</button></div>';}
+  else if(t.examState==='running'){var ep=t.examRem>=0?Math.max(0,Math.min(1,1-(t.examRem/EXAM))):1;prog.style.width=(ep*100)+'%';prog.style.backgroundColor=t.examRem<0?'rgba(231,76,60,0.35)':examColor(ep);badge.className='timer-badge visible st-exam';badge.textContent=(t.examRem<0?'ÜBER ':'')+fmt(t.examRem)+' ⏱';var ts=t.examRem<0?' style="color:#c0392b"':'';html='<div class="timer-display"><div class="timer-time"'+ts+'>'+(t.examRem<0?'+':'')+fmt(t.examRem)+'</div><div class="timer-label">'+(t.examRem<0?'<span class="timer-over">Prüfung überzogen!</span>':'Prüfung läuft...')+'</div></div><div class="timer-buttons"><button class="timer-btn btn-pause" data-action="exam_pause" data-sid="'+sid+'">Pause</button></div>'+examFormHtml(sid,t);}
+  else if(t.examState==='paused'){var ep2=t.examRem>=0?Math.max(0,Math.min(1,1-(t.examRem/EXAM))):1;prog.style.width=(ep2*100)+'%';prog.style.backgroundColor=t.examRem<0?'rgba(231,76,60,0.35)':examColor(ep2);badge.className='timer-badge visible st-paused';badge.textContent=fmt(t.examRem)+' ⏸';html='<div class="timer-display"><div class="timer-time">'+fmt(t.examRem)+'</div><div class="timer-label">Prüfung pausiert</div></div><div class="timer-buttons"><button class="timer-btn btn-resume" data-action="exam_resume" data-sid="'+sid+'">Fortsetzen</button></div>'+examFormHtml(sid,t);}
+  else if(t.examState==='done'){prog.style.width='100%';prog.style.backgroundColor='rgba(76,175,80,0.35)';badge.className='timer-badge visible st-done';badge.textContent='Abgeschlossen ✓';var zd=t.zeitDiff,zdText='',zdClass='';if(zd!==null&&zd!==undefined){if(zd>0){zdText=fmt(zd)+' früher fertig';zdClass='under';}else if(zd<0){zdText=fmt(Math.abs(zd))+' überzogen';zdClass='over';}else{zdText='Genau in der Zeit';zdClass='under';}}html='<div class="done-card"><h3 style="color:#4caf50">Prüfung abgeschlossen ✓</h3>'+(zdText?'<div class="zeit-info '+zdClass+'">'+zdText+'</div>':'')+'<div class="done-info"><div><span class="dl">Note:</span> '+t.note+'</div><div><span class="dl">Themenpool:</span> '+t.themen+'</div>'+(t.komm?'<div style="grid-column:1/-1"><span class="dl">Kommentar:</span> '+t.komm+'</div>':'')+'</div></div>';}
   ec.innerHTML=html;
 }
 
@@ -696,8 +458,7 @@ function examFormHtml(sid,t){
 function prepTick(sid){var t=g(sid);if(t.state!=='running')return;t.rem=Math.max(0,t.rem-1);if(t.rem<=0){t.state='prep_done';if(t.iid){clearInterval(t.iid);t.iid=null;}api(sid,'prep_done');render(sid);}else{tickUpdate(sid);}}
 function examTick(sid){var t=g(sid);if(t.examState!=='running')return;t.examRem=t.examRem-1;tickUpdate(sid);}
 function api(sid,action,body){var o={method:'POST',headers:{'Content-Type':'application/json'}};if(body)o.body=JSON.stringify(body);fetch('/api/timer/'+sid+'/'+action,o).catch(function(e){console.warn('Sync:',e);});}
-
-function sortCards(){var liste=document.querySelector('.schueler-liste');if(!liste)return;var cards=Array.from(liste.querySelectorAll('.schueler-item'));cards.sort(function(a,b){var sa=g(a.getAttribute('data-sid'));var sb=g(b.getAttribute('data-sid'));return(sa.examState==='done'?1:0)-(sb.examState==='done'?1:0);});cards.forEach(function(c){liste.appendChild(c);});}
+function sortCards(){var liste=document.querySelector('.schueler-liste');if(!liste)return;var cards=Array.from(liste.querySelectorAll('.schueler-item'));cards.sort(function(a,b){return(g(a.getAttribute('data-sid')).examState==='done'?1:0)-(g(b.getAttribute('data-sid')).examState==='done'?1:0);});cards.forEach(function(c){liste.appendChild(c);});}
 
 var pendingResetSid=null;var overlay=document.getElementById('confirmOverlay');var confirmText=document.getElementById('confirmText');
 document.getElementById('confirmYes').addEventListener('click',function(){if(pendingResetSid){var t=g(pendingResetSid);if(t.iid){clearInterval(t.iid);t.iid=null;}if(t.eiid){clearInterval(t.eiid);t.eiid=null;}t.state='idle';t.rem=PREP;t.examState='idle';t.examRem=EXAM;t.note=null;t.themen=null;t.komm='';t.zeitDiff=null;render(pendingResetSid);api(pendingResetSid,'reset');sortCards();}overlay.classList.remove('active');pendingResetSid=null;});
@@ -705,8 +466,7 @@ document.getElementById('confirmNo').addEventListener('click',function(){overlay
 
 document.addEventListener('click',function(e){
   var btn=e.target.closest('.timer-btn');
-  if(btn){
-    e.stopPropagation();e.preventDefault();var action=btn.getAttribute('data-action');var sid=btn.getAttribute('data-sid');if(!action||!sid)return;var t=g(sid);
+  if(btn){e.stopPropagation();e.preventDefault();var action=btn.getAttribute('data-action');var sid=btn.getAttribute('data-sid');if(!action||!sid)return;var t=g(sid);
     if(action==='start'){if(t.iid)clearInterval(t.iid);t.state='running';t.rem=PREP;t.iid=setInterval(function(){prepTick(sid);},1000);render(sid);api(sid,'start');}
     else if(action==='pause'){t.state='paused';if(t.iid){clearInterval(t.iid);t.iid=null;}render(sid);api(sid,'pause',{remaining_seconds:t.rem});}
     else if(action==='resume'){t.state='running';if(t.iid)clearInterval(t.iid);t.iid=setInterval(function(){prepTick(sid);},1000);render(sid);api(sid,'resume');}
@@ -716,35 +476,28 @@ document.addEventListener('click',function(e){
     else if(action==='exam_pause'){t.examState='paused';if(t.eiid){clearInterval(t.eiid);t.eiid=null;}render(sid);api(sid,'exam_pause',{exam_remaining:t.examRem});}
     else if(action==='exam_resume'){t.examState='running';if(t.eiid)clearInterval(t.eiid);t.eiid=setInterval(function(){examTick(sid);},1000);render(sid);api(sid,'exam_resume');}
     else if(action==='exam_finish'){var noteEl=document.getElementById('note-'+sid);var themenEl=document.getElementById('themen-'+sid);var kommEl=document.getElementById('komm-'+sid);var note=noteEl?noteEl.value:'';var themen=themenEl?themenEl.value:'';var komm=kommEl?kommEl.value:'';if(!note||!themen){alert('Bitte Note und Themenpool auswählen!');return;}if(t.eiid){clearInterval(t.eiid);t.eiid=null;}t.examState='done';t.note=parseInt(note);t.themen=parseInt(themen);t.komm=komm;t.zeitDiff=t.examRem;render(sid);api(sid,'exam_finish',{note:t.note,themenpool:t.themen,kommentar:komm,zeit_differenz:t.zeitDiff});sortCards();}
-    return;
-  }
+    return;}
   if(e.target.closest('.exam-form')){e.stopPropagation();return;}
   var card=e.target.closest('.schueler-item');if(card)card.classList.toggle('expanded');
 });
-
 document.addEventListener('change',function(e){var el=e.target;if(el.matches('select[data-field]')){var sid=el.getAttribute('data-sid');var field=el.getAttribute('data-field');var t=g(sid);if(field==='note')t.note=parseInt(el.value)||null;if(field==='themen')t.themen=parseInt(el.value)||null;}});
-document.addEventListener('input',function(e){var el=e.target;if(el.matches('textarea[data-field]')){var sid=el.getAttribute('data-sid');var t=g(sid);t.komm=el.value;}});
+document.addEventListener('input',function(e){var el=e.target;if(el.matches('textarea[data-field]')){var sid=el.getAttribute('data-sid');g(sid).komm=el.value;}});
 document.addEventListener('mousedown',function(e){if(e.target.closest('.exam-form'))e.stopPropagation();},true);
 
 document.querySelectorAll('.schueler-item').forEach(function(c){var sid=c.getAttribute('data-sid');if(sid)render(sid);});
 
 fetch('/api/timers/${zweig}').then(function(r){return r.json();}).then(function(data){
-  for(var sid in data){
-    if(!data.hasOwnProperty(sid))continue;var info=data[sid];var t=g(sid);
-    t.rem=Math.max(0,info.remaining_seconds);t.state=info.state||'idle';
-    t.examState=info.exam_state||'idle';t.examRem=info.exam_remaining!==undefined?info.exam_remaining:EXAM;
+  for(var sid in data){if(!data.hasOwnProperty(sid))continue;var info=data[sid];var t=g(sid);
+    t.rem=Math.max(0,info.remaining_seconds);t.state=info.state||'idle';t.examState=info.exam_state||'idle';t.examRem=info.exam_remaining!==undefined?info.exam_remaining:EXAM;
     t.note=info.note||null;t.themen=info.themenpool||null;t.komm=info.kommentar||'';t.zeitDiff=info.zeit_differenz;
     if(t.state==='prep_done')t.rem=0;
     if(t.state==='running'&&t.rem>0){(function(id){t.iid=setInterval(function(){prepTick(id);},1000);})(sid);}
     if(t.examState==='running'){(function(id){t.eiid=setInterval(function(){examTick(id);},1000);})(sid);}
-    render(sid);
-  }
+    render(sid);}
   sortCards();
 }).catch(function(e){console.warn('Load:',e);});
-
 })();
-</script>
-</body></html>`);
+</script></body></html>`);
     } catch(err){ console.error(err); res.status(500).send('Fehler'); }
 });
 
