@@ -11,8 +11,8 @@ require('dotenv').config({override: true});
 let isLoggedIn = false;
 
 // ===== TIMER-DAUER HIER ÄNDERN (in Sekunden) =====
-const VORBEREITUNGS_TIMER = 120;
-const PRUEFUNGS_TIMER = 120; // 12 Minuten
+const VORBEREITUNGS_TIMER = 1200;
+const PRUEFUNGS_TIMER = 720; // 12 Minuten
 // ================================================
 
 const sqlite3 = require('sqlite3').verbose();
@@ -46,15 +46,15 @@ const db = new sqlite3.Database(dbPath, (err) => {
                     done++;
                     if (done === newCols.length) {
                         db.run(`CREATE TABLE IF NOT EXISTS Pruefungs_Auswertung (
-                            id INTEGER PRIMARY KEY AUTOINCREMENT,
-                            schueler_id TEXT NOT NULL,
-                            Klasse TEXT, Nachname TEXT, Name TEXT,
-                            V_start_geplant TEXT, V_start_real TEXT,
-                            Exam_start_geplant TEXT, Exam_start_real TEXT,
-                            Pruefungsueberzug TEXT,
-                            Themenpool INTEGER, Note INTEGER, Kommentar TEXT,
-                            erstellt_am TEXT DEFAULT (datetime('now','localtime'))
-                        )`, () => { console.log('Alle Tabellen bereit'); initAlleTimer(); });
+                                                                                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                                                                                    schueler_id TEXT NOT NULL,
+                                                                                    Klasse TEXT, Vorname TEXT, Nachname TEXT,
+                                                                                    Pruefung_geplant TEXT,
+                                                                                    Pruefung_real TEXT,
+                                                                                    Pruefungsdauer TEXT,
+                                                                                    Themenpool INTEGER, Note INTEGER, Kommentar TEXT,
+                                                                                    erstellt_am TEXT DEFAULT (datetime('now','localtime'))
+                            )`, () => { console.log('Alle Tabellen bereit'); initAlleTimer(); });
                     }
                 });
             });
@@ -156,15 +156,18 @@ app.post('/api/timer/:id/exam_finish', requireAuth, (req, res) => {
             if (err) return res.status(500).json({ error: err.message });
             const rowid = id.split('_').slice(1).join('_');
             db.get('SELECT * FROM termine WHERE rowid=?', [rowid], (e2, sch) => {
-                db.get('SELECT v_start_real, exam_start_real FROM timer_status WHERE schueler_id=?', [id], (e3, ts) => {
-                    let ueberzug = '';
+                db.get('SELECT exam_start_real FROM timer_status WHERE schueler_id=?', [id], (e3, ts) => {
+                    // Prüfungsdauer berechnen: PRUEFUNGS_TIMER - verbleibende Sekunden
+                    let dauer = '';
                     if (zeit_differenz !== null && zeit_differenz !== undefined) {
-                        const secs = Math.abs(zeit_differenz), m = Math.floor(secs / 60), s = Math.floor(secs % 60);
-                        const mStr = ('0'+m).slice(-2) + ':' + ('0'+s).slice(-2);
-                        ueberzug = zeit_differenz > 0 ? '-' + mStr : (zeit_differenz < 0 ? '+' + mStr : '00:00');
+                        const dauerSecs = PRUEFUNGS_TIMER - zeit_differenz;
+                        const m = Math.floor(Math.abs(dauerSecs) / 60), s = Math.floor(Math.abs(dauerSecs) % 60);
+                        dauer = ('0'+m).slice(-2) + ':' + ('0'+s).slice(-2);
                     }
-                    db.run(`INSERT INTO Pruefungs_Auswertung (schueler_id,Klasse,Nachname,Name,V_start_geplant,V_start_real,Exam_start_geplant,Exam_start_real,Pruefungsueberzug,Themenpool,Note,Kommentar) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
-                        [id, sch?sch.klasse:'', sch?sch.nachname:'', sch?sch.vorname:'', sch?(sch.prep_start||sch.rep_start||''):'', ts?ts.v_start_real:'', sch?(sch.exam_start||''):'', ts?ts.exam_start_real:'', ueberzug, themenpool, note, kommentar||''],
+                    db.run(`INSERT INTO Pruefungs_Auswertung (schueler_id,Klasse,Vorname,Nachname,Pruefung_geplant,Pruefung_real,Pruefungsdauer,Themenpool,Note,Kommentar) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+                        [id, sch?sch.klasse:'', sch?sch.vorname:'', sch?sch.nachname:'',
+                            sch?(sch.exam_start||''):'', ts?ts.exam_start_real:'',
+                            dauer, themenpool, note, kommentar||''],
                         (e4) => { if(e4) console.error('Pruefungs_Auswertung Fehler:', e4.message); else console.log('Pruefungs_Auswertung gespeichert:', id); });
                     res.json({ ok: true });
                 });
