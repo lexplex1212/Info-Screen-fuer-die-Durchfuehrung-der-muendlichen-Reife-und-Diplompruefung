@@ -35,9 +35,7 @@ const db = new sqlite3.Database(dbPath, (err) => {
                 ['exam_started_at', 'INTEGER'],
                 ['exam_remaining', 'REAL DEFAULT ' + PRUEFUNGS_TIMER],
                 ['exam_state', "TEXT DEFAULT 'idle'"],
-                ['note', 'INTEGER'], ['themenpool', 'INTEGER'],
-                ['kommentar', 'TEXT'], ['zeit_differenz', 'REAL'],
-                ['v_start_real', 'TEXT'], ['exam_start_real', 'TEXT']
+                ['exam_start_real', 'TEXT']
             ];
             let done = 0;
             newCols.forEach(([col, type]) => {
@@ -98,7 +96,7 @@ app.get('/api/timer/:id', requireAuth, (req, res) => {
         if (err) return res.status(500).json({ error: err.message });
         if (!row) return res.json({ state: 'idle', remaining_seconds: VORBEREITUNGS_TIMER, exam_state: 'idle', exam_remaining: PRUEFUNGS_TIMER });
         const now = Date.now();
-        const result = { state: row.state, remaining_seconds: row.remaining_seconds, exam_state: row.exam_state || 'idle', exam_remaining: row.exam_remaining || PRUEFUNGS_TIMER, note: row.note, themenpool: row.themenpool, kommentar: row.kommentar, zeit_differenz: row.zeit_differenz };
+        const result = { state: row.state, remaining_seconds: row.remaining_seconds, exam_state: row.exam_state || 'idle', exam_remaining: row.exam_remaining || PRUEFUNGS_TIMER };
         if (row.state === 'running' && row.started_at) { const elapsed = (now - row.started_at) / 1000; result.remaining_seconds = Math.max(0, row.remaining_seconds - elapsed); if (result.remaining_seconds <= 0) result.state = 'prep_done'; }
         if (row.exam_state === 'running' && row.exam_started_at) { result.exam_remaining = row.exam_remaining - (now - row.exam_started_at) / 1000; }
         res.json(result);
@@ -106,9 +104,9 @@ app.get('/api/timer/:id', requireAuth, (req, res) => {
 });
 
 app.post('/api/timer/:id/start', requireAuth, (req, res) => {
-    const id = req.params.id; const now = Date.now(); const ts = nowTimeStr();
-    db.run(`INSERT INTO timer_status (schueler_id, started_at, remaining_seconds, state, v_start_real) VALUES (?, ?, ${VORBEREITUNGS_TIMER}, 'running', ?) ON CONFLICT(schueler_id) DO UPDATE SET started_at=?, remaining_seconds=${VORBEREITUNGS_TIMER}, state='running', paused_at=NULL, v_start_real=?`,
-        [id, now, ts, now, ts], (err) => { if (err) return res.status(500).json({ error: err.message }); res.json({ ok: true }); });
+    const id = req.params.id; const now = Date.now();
+    db.run(`INSERT INTO timer_status (schueler_id, started_at, remaining_seconds, state) VALUES (?, ?, ${VORBEREITUNGS_TIMER}, 'running') ON CONFLICT(schueler_id) DO UPDATE SET started_at=?, remaining_seconds=${VORBEREITUNGS_TIMER}, state='running', paused_at=NULL`,
+        [id, now, now], (err) => { if (err) return res.status(500).json({ error: err.message }); res.json({ ok: true }); });
 });
 
 app.post('/api/timer/:id/pause', requireAuth, (req, res) => {
@@ -123,7 +121,7 @@ app.post('/api/timer/:id/resume', requireAuth, (req, res) => {
 
 app.post('/api/timer/:id/reset', requireAuth, (req, res) => {
     const id = req.params.id;
-    db.run(`UPDATE timer_status SET state='idle', started_at=NULL, paused_at=NULL, remaining_seconds=${VORBEREITUNGS_TIMER}, exam_state='idle', exam_started_at=NULL, exam_remaining=${PRUEFUNGS_TIMER}, note=NULL, themenpool=NULL, kommentar=NULL, zeit_differenz=NULL, v_start_real=NULL, exam_start_real=NULL WHERE schueler_id=?`,
+    db.run(`UPDATE timer_status SET state='idle', started_at=NULL, paused_at=NULL, remaining_seconds=${VORBEREITUNGS_TIMER}, exam_state='idle', exam_started_at=NULL, exam_remaining=${PRUEFUNGS_TIMER}, exam_start_real=NULL WHERE schueler_id=?`,
         [id], (err) => { if (err) return res.status(500).json({ error: err.message }); res.json({ ok: true }); });
 });
 
@@ -151,28 +149,29 @@ app.post('/api/timer/:id/exam_finish', requireAuth, (req, res) => {
     const id = req.params.id;
     const { note, themenpool, kommentar, zeit_differenz } = req.body;
     if (!note || !themenpool) return res.status(400).json({ error: 'Note und Themenpool sind Pflicht' });
-    db.run(`UPDATE timer_status SET exam_state='done', note=?, themenpool=?, kommentar=?, zeit_differenz=? WHERE schueler_id=?`,
-        [note, themenpool, kommentar || '', zeit_differenz, id], (err) => {
-            if (err) return res.status(500).json({ error: err.message });
-            const rowid = id.split('_').slice(1).join('_');
-            db.get('SELECT * FROM termine WHERE rowid=?', [rowid], (e2, sch) => {
-                db.get('SELECT exam_start_real FROM timer_status WHERE schueler_id=?', [id], (e3, ts) => {
-                    // Prüfungsdauer berechnen: PRUEFUNGS_TIMER - verbleibende Sekunden
-                    let dauer = '';
-                    if (zeit_differenz !== null && zeit_differenz !== undefined) {
-                        const dauerSecs = PRUEFUNGS_TIMER - zeit_differenz;
-                        const m = Math.floor(Math.abs(dauerSecs) / 60), s = Math.floor(Math.abs(dauerSecs) % 60);
-                        dauer = ('0'+m).slice(-2) + ':' + ('0'+s).slice(-2);
-                    }
-                    db.run(`INSERT INTO Pruefungs_Auswertung (schueler_id,Klasse,Vorname,Nachname,Pruefung_geplant,Pruefung_real,Pruefungsdauer,Themenpool,Note,Kommentar) VALUES (?,?,?,?,?,?,?,?,?,?)`,
-                        [id, sch?sch.klasse:'', sch?sch.vorname:'', sch?sch.nachname:'',
-                            sch?(sch.exam_start||''):'', ts?ts.exam_start_real:'',
-                            dauer, themenpool, note, kommentar||''],
-                        (e4) => { if(e4) console.error('Pruefungs_Auswertung Fehler:', e4.message); else console.log('Pruefungs_Auswertung gespeichert:', id); });
-                    res.json({ ok: true });
-                });
+    db.run(`UPDATE timer_status SET exam_state='done' WHERE schueler_id=?`, [id], (err) => {
+        if (err) return res.status(500).json({ error: err.message });
+        const rowid = id.split('_').slice(1).join('_');
+        db.get('SELECT * FROM termine WHERE rowid=?', [rowid], (e2, sch) => {
+            db.get('SELECT exam_start_real FROM timer_status WHERE schueler_id=?', [id], (e3, ts) => {
+                // Prüfungsdauer: PRUEFUNGS_TIMER - verbleibende Sekunden = tatsächlich gebraucht
+                let dauer = '';
+                if (zeit_differenz !== null && zeit_differenz !== undefined) {
+                    const dauerSecs = Math.abs(PRUEFUNGS_TIMER - zeit_differenz);
+                    const h = Math.floor(dauerSecs / 3600);
+                    const m = Math.floor((dauerSecs % 3600) / 60);
+                    const s = Math.floor(dauerSecs % 60);
+                    dauer = ('0'+h).slice(-2) + ':' + ('0'+m).slice(-2) + ':' + ('0'+s).slice(-2);
+                }
+                db.run(`INSERT INTO Pruefungs_Auswertung (schueler_id,Klasse,Vorname,Nachname,Pruefung_geplant,Pruefung_real,Pruefungsdauer,Themenpool,Note,Kommentar) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+                    [id, sch?sch.klasse:'', sch?sch.vorname:'', sch?sch.nachname:'',
+                        sch?(sch.exam_start||''):'', ts?ts.exam_start_real:'',
+                        dauer, themenpool, note, kommentar||''],
+                    (e4) => { if(e4) console.error('Pruefungs_Auswertung Fehler:', e4.message); else console.log('Pruefungs_Auswertung gespeichert:', id); });
+                res.json({ ok: true });
             });
         });
+    });
 });
 
 app.get('/api/timers/:zweig', requireAuth, (req, res) => {
@@ -181,7 +180,7 @@ app.get('/api/timers/:zweig', requireAuth, (req, res) => {
         if (err) return res.status(500).json({ error: err.message });
         const timers = {}; const now = Date.now();
         (rows || []).forEach(row => {
-            const t = { state: row.state, remaining_seconds: row.remaining_seconds, exam_state: row.exam_state || 'idle', exam_remaining: row.exam_remaining || PRUEFUNGS_TIMER, note: row.note, themenpool: row.themenpool, kommentar: row.kommentar, zeit_differenz: row.zeit_differenz };
+            const t = { state: row.state, remaining_seconds: row.remaining_seconds, exam_state: row.exam_state || 'idle', exam_remaining: row.exam_remaining || PRUEFUNGS_TIMER };
             if (row.state === 'running' && row.started_at) { const el = (now - row.started_at) / 1000; t.remaining_seconds = Math.max(0, row.remaining_seconds - el); if (t.remaining_seconds <= 0) t.state = 'prep_done'; }
             if (row.exam_state === 'running' && row.exam_started_at) { t.exam_remaining = row.exam_remaining - (now - row.exam_started_at) / 1000; }
             timers[row.schueler_id] = t;
@@ -492,7 +491,7 @@ document.querySelectorAll('.schueler-item').forEach(function(c){var sid=c.getAtt
 fetch('/api/timers/${zweig}').then(function(r){return r.json();}).then(function(data){
   for(var sid in data){if(!data.hasOwnProperty(sid))continue;var info=data[sid];var t=g(sid);
     t.rem=Math.max(0,info.remaining_seconds);t.state=info.state||'idle';t.examState=info.exam_state||'idle';t.examRem=info.exam_remaining!==undefined?info.exam_remaining:EXAM;
-    t.note=info.note||null;t.themen=info.themenpool||null;t.komm=info.kommentar||'';t.zeitDiff=info.zeit_differenz;
+    t.note=null;t.themen=null;t.komm='';t.zeitDiff=null;
     if(t.state==='prep_done')t.rem=0;
     if(t.state==='running'&&t.rem>0){(function(id){t.iid=setInterval(function(){prepTick(id);},1000);})(sid);}
     if(t.examState==='running'){(function(id){t.eiid=setInterval(function(){examTick(id);},1000);})(sid);}
