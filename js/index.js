@@ -11,8 +11,8 @@ require('dotenv').config({override: true});
 let isLoggedIn = false;
 
 // ===== TIMER-DAUER HIER ÄNDERN (in Sekunden) =====
-const VORBEREITUNGS_TIMER = 1200;
-const PRUEFUNGS_TIMER = 720; // 12 Minuten
+const VORBEREITUNGS_TIMER = 120;
+const PRUEFUNGS_TIMER = 120; // 12 Minuten
 // ================================================
 
 const sqlite3 = require('sqlite3').verbose();
