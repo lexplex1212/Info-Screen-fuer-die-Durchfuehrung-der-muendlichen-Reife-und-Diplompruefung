@@ -67,22 +67,22 @@ function setupAuswertungTabelle() {
     // ===== Pruefer_Auswertung: Saubere Export-Tabelle =====
     // KEIN schueler_id, KEIN zeit_differenz, KEIN abgeschlossen_am
     db.run(`CREATE TABLE IF NOT EXISTS Pruefer_Auswertung (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        vorname TEXT,
-        nachname TEXT,
-        klasse TEXT,
-        fach TEXT,
-        pruefer TEXT,
-        beisitz TEXT,
-        datum TEXT,
-        note INTEGER NOT NULL,
-        themenpool INTEGER NOT NULL,
-        kommentar TEXT,
-        geplant_start TEXT,
-        tatsaechlich_gestartet TEXT,
-        pruefungsdauer TEXT,
-        UNIQUE(vorname, nachname, klasse)
-    )`, (err) => {
+                                                              id INTEGER PRIMARY KEY AUTOINCREMENT,
+                                                              vorname TEXT,
+                                                              nachname TEXT,
+                                                              klasse TEXT,
+                                                              fach TEXT,
+                                                              pruefer TEXT,
+                                                              beisitz TEXT,
+                                                              datum TEXT,
+                                                              note INTEGER NOT NULL,
+                                                              themenpool INTEGER NOT NULL,
+                                                              kommentar TEXT,
+                                                              geplant_start TEXT,
+                                                              tatsaechlich_gestartet TEXT,
+                                                              pruefungsdauer TEXT,
+                                                              UNIQUE(vorname, nachname, klasse)
+        )`, (err) => {
         if (err && !err.message.includes('already exists'))
             console.error('Pruefer_Auswertung:', err.message);
         // Spalten nachrüsten falls Tabelle alt
@@ -249,8 +249,8 @@ app.post('/api/timer/:id/reset', requireAuth, async (req, res) => {
     const id = req.params.id;
     const info = await getSchuelerInfoFromSid(id);
     db.run(`UPDATE timer_status SET state='idle', started_at=NULL, paused_at=NULL, remaining_seconds=${VORBEREITUNGS_TIMER},
-            exam_state='idle', exam_started_at=NULL, exam_remaining=${PRUEFUNGS_TIMER},
-            note=NULL, themenpool=NULL, kommentar=NULL, tatsaechlich_gestartet=NULL, pruefungsdauer=NULL WHERE schueler_id=?`,
+                                    exam_state='idle', exam_started_at=NULL, exam_remaining=${PRUEFUNGS_TIMER},
+                                    note=NULL, themenpool=NULL, kommentar=NULL, tatsaechlich_gestartet=NULL, pruefungsdauer=NULL WHERE schueler_id=?`,
         [id], (err) => {
             if (err) return res.status(500).json({ error: err.message });
             if (info) {
@@ -730,15 +730,16 @@ function render(sid){
   else if(t.examState==='done'){
     prog.style.width='100%';prog.style.backgroundColor='rgba(76,175,80,0.3)';
     badge.className='timer-badge visible st-done';badge.textContent='Fertig ✓';
+    var sInfo=findSchueler(sid)||{};
     html='<div class="done-card"><h3>Abgeschlossen ✓</h3>'
       +'<div class="done-info">'
       +'<div><span class="dl">Note:</span> '+t.note+'</div>'
       +'<div><span class="dl">Themenpool:</span> '+t.themen+'</div>'
-      +(t.examStartedAt?'<div><span class="dl">Gestartet:</span> '+t.examStartedAt+' Uhr</div>':'')
+      +(sInfo.exam_start?'<div><span class="dl">Geplant:</span> '+sInfo.exam_start+(sInfo.exam_end?' - '+sInfo.exam_end:'')+'</div>':'')
+      +(t.examStartedAt?'<div><span class="dl">Tatsächlich:</span> '+t.examStartedAt+' Uhr</div>':'')
       +(t.pruefDauer?'<div><span class="dl">Dauer:</span> '+t.pruefDauer+'</div>':'')
       +(t.komm?'<div style="grid-column:1/-1"><span class="dl">Kommentar:</span> '+t.komm+'</div>':'')
       +'</div>'
-      +'<div class="timer-buttons" style="margin-top:10px"><button class="timer-btn btn-reset" data-action="reset" data-sid="'+sid+'">Reset</button></div>'
       +'</div>';
   }
   ec.innerHTML=html;
