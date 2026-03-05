@@ -446,7 +446,7 @@ document.addEventListener('click',function(e){var btn=e.target.closest('.timer-b
 document.addEventListener('change',function(e){var el=e.target;if(el.matches('select[data-field]')){var sid=el.getAttribute('data-sid'),f=el.getAttribute('data-field'),t=g(sid);if(f==='note')t.note=parseInt(el.value)||null;if(f==='themen')t.themen=parseInt(el.value)||null;}});
 document.addEventListener('input',function(e){var el=e.target;if(el.matches('textarea[data-field]'))g(el.getAttribute('data-sid')).komm=el.value;});
 document.addEventListener('mousedown',function(e){if(e.target.closest('.exam-form'))e.stopPropagation();},true);
-// Initial render wird durch applyServerData gemacht
+document.querySelectorAll('.schueler-item').forEach(function(c){var sid=c.getAttribute('data-sid');if(sid)render(sid);});
 fetch('/api/timers/all').then(function(r){return r.json();}).then(function(data){applyServerData(data);}).catch(function(e){console.warn('Load:',e);});
 function applyServerData(data){for(var sid in data){if(!data.hasOwnProperty(sid))continue;var info=data[sid],t=g(sid);
 t.state=info.state||'idle';
