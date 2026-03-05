@@ -443,9 +443,16 @@ document.addEventListener('change',function(e){var el=e.target;if(el.matches('se
 document.addEventListener('input',function(e){var el=e.target;if(el.matches('textarea[data-field]'))g(el.getAttribute('data-sid')).komm=el.value;});
 document.addEventListener('mousedown',function(e){if(e.target.closest('.exam-form'))e.stopPropagation();},true);
 document.querySelectorAll('.schueler-item').forEach(function(c){var sid=c.getAttribute('data-sid');if(sid)render(sid);});
-fetch('/api/timers/all').then(function(r){return r.json();}).then(function(data){applyServerData(data);}).catch(function(e){console.warn('Load:',e);});
-function applyServerData(data){var changed=false;for(var sid in data){if(!data.hasOwnProperty(sid))continue;var info=data[sid],t=g(sid);var oldKey=t.state+'|'+t.examState;var newState=info.state||'idle';var newExam=info.exam_state||'idle';if(newState==='prep_done'&&t.state==='running'){if(t.iid){clearInterval(t.iid);t.iid=null;}}if(newExam==='done'&&t.examState!=='done'){if(t.eiid){clearInterval(t.eiid);t.eiid=null;}}t.rem=Math.max(0,info.remaining_seconds);t.state=newState;t.examState=newExam;t.examRem=info.exam_remaining!==undefined?info.exam_remaining:EXAM;if(t.state==='prep_done')t.rem=0;if(t.state==='running'&&!t.iid&&t.rem>0){(function(id){t.iid=setInterval(function(){prepTick(id);},1000);})(sid);}if(t.state!=='running'&&t.iid){clearInterval(t.iid);t.iid=null;}if(t.examState==='running'&&!t.eiid){(function(id){t.eiid=setInterval(function(){examTick(id);},1000);})(sid);}if(t.examState!=='running'&&t.eiid){clearInterval(t.eiid);t.eiid=null;}var newKey=t.state+'|'+t.examState;if(oldKey!==newKey){render(sid);changed=true;}}if(changed)sortCards();}
-setInterval(function(){fetch('/api/timers/all').then(function(r){return r.json();}).then(function(data){applyServerData(data);}).catch(function(){});},5000);
+fetch('/api/timers/all').then(function(r){return r.json();}).then(function(data){applyServerData(data,true);}).catch(function(e){console.warn('Load:',e);});
+function applyServerData(data,isInit){var changed=false;for(var sid in data){if(!data.hasOwnProperty(sid))continue;var info=data[sid],t=g(sid);var oldKey=t.state+'|'+t.examState;var newState=info.state||'idle';var newExam=info.exam_state||'idle';
+t.state=newState;t.examState=newExam;
+t.rem=Math.max(0,info.remaining_seconds);
+t.examRem=info.exam_remaining!==undefined?info.exam_remaining:EXAM;
+if(t.state==='prep_done')t.rem=0;
+if(t.state==='running'&&t.rem>0){if(!t.iid){(function(id){t.iid=setInterval(function(){prepTick(id);},1000);})(sid);}}else{if(t.iid){clearInterval(t.iid);t.iid=null;}}
+if(t.examState==='running'){if(!t.eiid){(function(id){t.eiid=setInterval(function(){examTick(id);},1000);})(sid);}}else{if(t.eiid){clearInterval(t.eiid);t.eiid=null;}}
+var newKey=t.state+'|'+t.examState;if(isInit||oldKey!==newKey){render(sid);changed=true;}}if(changed)sortCards();}
+setInterval(function(){fetch('/api/timers/all').then(function(r){return r.json();}).then(function(data){applyServerData(data,false);}).catch(function(){});},3000);
 })();
 </script></body></html>`);
     } catch(err) { console.error(err); res.status(500).send('Fehler'); }
