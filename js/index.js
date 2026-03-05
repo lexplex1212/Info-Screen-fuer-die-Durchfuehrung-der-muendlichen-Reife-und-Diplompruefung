@@ -24,48 +24,87 @@ const db = new sqlite3.Database(dbPath, (err) => {
     } else {
         console.log('Verbindung zur Datenbank termine.db erfolgreich hergestellt');
 
-        // timer_status Tabelle (nur Timer-Logik, KEINE Ergebnisse)
+        // timer_status: Timer-Logik + Ergebnis-Cache für Live-Anzeige
         db.run(`CREATE TABLE IF NOT EXISTS timer_status (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            schueler_id TEXT UNIQUE NOT NULL,
-            started_at INTEGER,
-            paused_at INTEGER,
-            remaining_seconds REAL NOT NULL DEFAULT ${VORBEREITUNGS_TIMER},
-            state TEXT NOT NULL DEFAULT 'idle',
-            exam_started_at INTEGER,
-            exam_remaining REAL DEFAULT ${PRUEFUNGS_TIMER},
-            exam_state TEXT DEFAULT 'idle'
-        )`, (err) => {
+                                                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                                                            schueler_id TEXT UNIQUE NOT NULL,
+                                                            started_at INTEGER,
+                                                            paused_at INTEGER,
+                                                            remaining_seconds REAL NOT NULL DEFAULT ${VORBEREITUNGS_TIMER},
+                                                            state TEXT NOT NULL DEFAULT 'idle',
+                                                            exam_started_at INTEGER,
+                                                            exam_remaining REAL DEFAULT ${PRUEFUNGS_TIMER},
+                                                            exam_state TEXT DEFAULT 'idle',
+                                                            note INTEGER,
+                                                            themenpool INTEGER,
+                                                            kommentar TEXT,
+                                                            tatsaechlich_gestartet TEXT,
+                                                            pruefungsdauer TEXT
+                )`, (err) => {
             if (err) console.error('timer_status:', err.message);
-        });
-
-        // ===== NEUE TABELLE: Pruefer_Auswertung =====
-        db.run(`CREATE TABLE IF NOT EXISTS Pruefer_Auswertung (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            schueler_id TEXT NOT NULL,
-            vorname TEXT,
-            nachname TEXT,
-            klasse TEXT,
-            fach TEXT,
-            pruefer TEXT,
-            beisitz TEXT,
-            datum TEXT,
-            note INTEGER NOT NULL,
-            themenpool INTEGER NOT NULL,
-            kommentar TEXT,
-            zeit_differenz REAL,
-            abgeschlossen_am TEXT DEFAULT (datetime('now','localtime')),
-            UNIQUE(schueler_id)
-        )`, (err) => {
-            if (err && !err.message.includes('already exists'))
-                console.error('Pruefer_Auswertung:', err.message);
-            else
-                console.log('Tabelle Pruefer_Auswertung bereit');
-            // Timer-Init starten nachdem beide Tabellen ready
-            initAlleTimer();
+            // Spalten nachrüsten falls Tabelle schon existiert
+            const newCols = [
+                ['note', 'INTEGER'],
+                ['themenpool', 'INTEGER'],
+                ['kommentar', 'TEXT'],
+                ['tatsaechlich_gestartet', 'TEXT'],
+                ['pruefungsdauer', 'TEXT']
+            ];
+            let done = 0;
+            newCols.forEach(([col, type]) => {
+                db.run(`ALTER TABLE timer_status ADD COLUMN ${col} ${type}`, (err) => {
+                    if (err && !err.message.includes('duplicate column'))
+                        console.error('Spalte ' + col + ':', err.message);
+                    done++;
+                    if (done === newCols.length) setupAuswertungTabelle();
+                });
+            });
         });
     }
 });
+
+function setupAuswertungTabelle() {
+    // ===== Pruefer_Auswertung: Saubere Export-Tabelle =====
+    // KEIN schueler_id, KEIN zeit_differenz, KEIN abgeschlossen_am
+    db.run(`CREATE TABLE IF NOT EXISTS Pruefer_Auswertung (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        vorname TEXT,
+        nachname TEXT,
+        klasse TEXT,
+        fach TEXT,
+        pruefer TEXT,
+        beisitz TEXT,
+        datum TEXT,
+        note INTEGER NOT NULL,
+        themenpool INTEGER NOT NULL,
+        kommentar TEXT,
+        geplant_start TEXT,
+        tatsaechlich_gestartet TEXT,
+        pruefungsdauer TEXT,
+        UNIQUE(vorname, nachname, klasse)
+    )`, (err) => {
+        if (err && !err.message.includes('already exists'))
+            console.error('Pruefer_Auswertung:', err.message);
+        // Spalten nachrüsten falls Tabelle alt
+        const newCols = [
+            ['geplant_start', 'TEXT'],
+            ['tatsaechlich_gestartet', 'TEXT'],
+            ['pruefungsdauer', 'TEXT']
+        ];
+        let done = 0;
+        newCols.forEach(([col, type]) => {
+            db.run(`ALTER TABLE Pruefer_Auswertung ADD COLUMN ${col} ${type}`, (err) => {
+                if (err && !err.message.includes('duplicate column'))
+                    console.error('AW Spalte ' + col + ':', err.message);
+                done++;
+                if (done === newCols.length) {
+                    console.log('Pruefer_Auswertung Tabelle bereit');
+                    initAlleTimer();
+                }
+            });
+        });
+    });
+}
 
 const klassen = {
     elektronik: ['5AHEL', '5BHEL', '5CHEL'],
@@ -129,7 +168,6 @@ function base64UrlDecode(str) {
     return Buffer.from(str, 'base64').toString('utf8');
 }
 
-// Alle Schüler laden (ohne Zweig-Filter)
 function getAlleSchueler() {
     return new Promise((resolve) => {
         const alleKlassen = Object.values(klassen).flat();
@@ -137,6 +175,18 @@ function getAlleSchueler() {
         db.all(`SELECT rowid, * FROM termine WHERE klasse IN (${ph}) ORDER BY klasse, nachname, vorname`, alleKlassen, (err, rows) => {
             if (err) return resolve([]);
             resolve(rows);
+        });
+    });
+}
+
+// Schüler-Info aus termine anhand schueler_id (für Reset-Löschung)
+function getSchuelerInfoFromSid(sid) {
+    return new Promise((resolve) => {
+        const parts = sid.split('_');
+        const rowid = parseInt(parts[parts.length - 1]);
+        if (isNaN(rowid)) return resolve(null);
+        db.get('SELECT rowid, * FROM termine WHERE rowid = ?', [rowid], (err, row) => {
+            resolve(err ? null : row);
         });
     });
 }
@@ -151,7 +201,9 @@ app.get('/api/timer/:id', requireAuth, (req, res) => {
         const now = Date.now();
         const result = {
             state: row.state, remaining_seconds: row.remaining_seconds,
-            exam_state: row.exam_state || 'idle', exam_remaining: row.exam_remaining || PRUEFUNGS_TIMER
+            exam_state: row.exam_state || 'idle', exam_remaining: row.exam_remaining || PRUEFUNGS_TIMER,
+            note: row.note, themenpool: row.themenpool, kommentar: row.kommentar,
+            tatsaechlich_gestartet: row.tatsaechlich_gestartet, pruefungsdauer: row.pruefungsdauer
         };
         if (row.state === 'running' && row.started_at) {
             const elapsed = (now - row.started_at) / 1000;
@@ -162,23 +214,14 @@ app.get('/api/timer/:id', requireAuth, (req, res) => {
             const elapsed = (now - row.exam_started_at) / 1000;
             result.exam_remaining = row.exam_remaining - elapsed;
         }
-        // Ergebnisse aus Pruefer_Auswertung holen
-        db.get('SELECT note, themenpool, kommentar, zeit_differenz FROM Pruefer_Auswertung WHERE schueler_id = ?', [id], (err2, aw) => {
-            if (aw) {
-                result.note = aw.note;
-                result.themenpool = aw.themenpool;
-                result.kommentar = aw.kommentar;
-                result.zeit_differenz = aw.zeit_differenz;
-            }
-            res.json(result);
-        });
+        res.json(result);
     });
 });
 
 app.post('/api/timer/:id/start', requireAuth, (req, res) => {
     const id = req.params.id; const now = Date.now();
     db.run(`INSERT INTO timer_status (schueler_id, started_at, remaining_seconds, state) VALUES (?, ?, ${VORBEREITUNGS_TIMER}, 'running')
-        ON CONFLICT(schueler_id) DO UPDATE SET started_at=?, remaining_seconds=${VORBEREITUNGS_TIMER}, state='running', paused_at=NULL`,
+                ON CONFLICT(schueler_id) DO UPDATE SET started_at=?, remaining_seconds=${VORBEREITUNGS_TIMER}, state='running', paused_at=NULL`,
         [id, now, now], (err) => {
             if (err) return res.status(500).json({ error: err.message });
             res.json({ ok: true });
@@ -202,16 +245,19 @@ app.post('/api/timer/:id/resume', requireAuth, (req, res) => {
     });
 });
 
-app.post('/api/timer/:id/reset', requireAuth, (req, res) => {
+app.post('/api/timer/:id/reset', requireAuth, async (req, res) => {
     const id = req.params.id;
+    const info = await getSchuelerInfoFromSid(id);
     db.run(`UPDATE timer_status SET state='idle', started_at=NULL, paused_at=NULL, remaining_seconds=${VORBEREITUNGS_TIMER},
-                                    exam_state='idle', exam_started_at=NULL, exam_remaining=${PRUEFUNGS_TIMER} WHERE schueler_id=?`,
+            exam_state='idle', exam_started_at=NULL, exam_remaining=${PRUEFUNGS_TIMER},
+            note=NULL, themenpool=NULL, kommentar=NULL, tatsaechlich_gestartet=NULL, pruefungsdauer=NULL WHERE schueler_id=?`,
         [id], (err) => {
             if (err) return res.status(500).json({ error: err.message });
-            // Auswertung auch löschen bei Reset
-            db.run('DELETE FROM Pruefer_Auswertung WHERE schueler_id=?', [id], () => {
-                res.json({ ok: true });
-            });
+            if (info) {
+                db.run('DELETE FROM Pruefer_Auswertung WHERE vorname=? AND nachname=? AND klasse=?',
+                    [info.vorname || '', info.nachname || '', info.klasse || ''], () => {});
+            }
+            res.json({ ok: true });
         });
 });
 
@@ -227,10 +273,12 @@ app.post('/api/timer/:id/prep_done', requireAuth, (req, res) => {
 
 app.post('/api/timer/:id/exam_start', requireAuth, (req, res) => {
     const id = req.params.id; const now = Date.now();
-    db.run(`UPDATE timer_status SET exam_state='running', exam_started_at=?, exam_remaining=${PRUEFUNGS_TIMER} WHERE schueler_id=?`,
-        [now, id], (err) => {
+    const d = new Date(now);
+    const uhrzeitStr = (d.getHours() < 10 ? '0' : '') + d.getHours() + ':' + (d.getMinutes() < 10 ? '0' : '') + d.getMinutes();
+    db.run(`UPDATE timer_status SET exam_state='running', exam_started_at=?, exam_remaining=${PRUEFUNGS_TIMER}, tatsaechlich_gestartet=? WHERE schueler_id=?`,
+        [now, uhrzeitStr, id], (err) => {
             if (err) return res.status(500).json({ error: err.message });
-            res.json({ ok: true });
+            res.json({ ok: true, tatsaechlich_gestartet: uhrzeitStr });
         });
 });
 
@@ -251,39 +299,44 @@ app.post('/api/timer/:id/exam_resume', requireAuth, (req, res) => {
     });
 });
 
-// ===== EXAM FINISH: Speichert in Pruefer_Auswertung =====
+// ===== EXAM FINISH: In timer_status + Pruefer_Auswertung speichern =====
 app.post('/api/timer/:id/exam_finish', requireAuth, (req, res) => {
     const id = req.params.id;
-    const { note, themenpool, kommentar, zeit_differenz, vorname, nachname, klasse, fach, pruefer, beisitz, datum } = req.body;
+    const { note, themenpool, kommentar, pruefungsdauer,
+        vorname, nachname, klasse, fach, pruefer, beisitz, datum, geplant_start, tatsaechlich_gestartet } = req.body;
     if (!note || !themenpool) return res.status(400).json({ error: 'Note und Themenpool sind Pflicht' });
 
-    // Timer auf done setzen
-    db.run(`UPDATE timer_status SET exam_state='done' WHERE schueler_id=?`, [id], (err) => {
-        if (err) return res.status(500).json({ error: err.message });
+    db.run(`UPDATE timer_status SET exam_state='done', note=?, themenpool=?, kommentar=?, pruefungsdauer=? WHERE schueler_id=?`,
+        [note, themenpool, kommentar || '', pruefungsdauer || '', id], (err) => {
+            if (err) return res.status(500).json({ error: err.message });
 
-        // In Pruefer_Auswertung speichern (INSERT OR REPLACE)
-        db.run(`INSERT OR REPLACE INTO Pruefer_Auswertung 
-            (schueler_id, vorname, nachname, klasse, fach, pruefer, beisitz, datum, note, themenpool, kommentar, zeit_differenz)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            [id, vorname || '', nachname || '', klasse || '', fach || '', pruefer || '', beisitz || '', datum || '',
-                note, themenpool, kommentar || '', zeit_differenz],
-            (err2) => {
-                if (err2) return res.status(500).json({ error: err2.message });
-                res.json({ ok: true });
-            });
-    });
+            db.run(`INSERT INTO Pruefer_Auswertung
+                    (vorname, nachname, klasse, fach, pruefer, beisitz, datum, note, themenpool, kommentar, geplant_start, tatsaechlich_gestartet, pruefungsdauer)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(vorname, nachname, klasse) DO UPDATE SET
+                        fach=excluded.fach, pruefer=excluded.pruefer, beisitz=excluded.beisitz, datum=excluded.datum,
+                                                                      note=excluded.note, themenpool=excluded.themenpool, kommentar=excluded.kommentar,
+                                                                      geplant_start=excluded.geplant_start, tatsaechlich_gestartet=excluded.tatsaechlich_gestartet, pruefungsdauer=excluded.pruefungsdauer`,
+                [vorname || '', nachname || '', klasse || '', fach || '', pruefer || '', beisitz || '', datum || '',
+                    note, themenpool, kommentar || '', geplant_start || '', tatsaechlich_gestartet || '', pruefungsdauer || ''],
+                (err2) => {
+                    if (err2) return res.status(500).json({ error: err2.message });
+                    res.json({ ok: true });
+                });
+        });
 });
 
-// Alle Timer laden (kein Zweig-Filter mehr)
+// Alle Timer laden
 app.get('/api/timers/all', requireAuth, (req, res) => {
     db.all('SELECT * FROM timer_status', [], (err, rows) => {
         if (err) return res.status(500).json({ error: err.message });
         const timers = {}; const now = Date.now();
-        const sids = [];
         (rows || []).forEach(row => {
             const t = {
                 state: row.state, remaining_seconds: row.remaining_seconds,
-                exam_state: row.exam_state || 'idle', exam_remaining: row.exam_remaining || PRUEFUNGS_TIMER
+                exam_state: row.exam_state || 'idle', exam_remaining: row.exam_remaining || PRUEFUNGS_TIMER,
+                note: row.note, themenpool: row.themenpool, kommentar: row.kommentar,
+                tatsaechlich_gestartet: row.tatsaechlich_gestartet, pruefungsdauer: row.pruefungsdauer
             };
             if (row.state === 'running' && row.started_at) {
                 const el = (now - row.started_at) / 1000;
@@ -295,29 +348,12 @@ app.get('/api/timers/all', requireAuth, (req, res) => {
                 t.exam_remaining = row.exam_remaining - el;
             }
             timers[row.schueler_id] = t;
-            sids.push(row.schueler_id);
         });
-
-        // Auswertungen dazuladen
-        if (sids.length === 0) return res.json(timers);
-        const ph = sids.map(() => '?').join(',');
-        db.all(`SELECT * FROM Pruefer_Auswertung WHERE schueler_id IN (${ph})`, sids, (err2, awRows) => {
-            if (awRows) {
-                awRows.forEach(aw => {
-                    if (timers[aw.schueler_id]) {
-                        timers[aw.schueler_id].note = aw.note;
-                        timers[aw.schueler_id].themenpool = aw.themenpool;
-                        timers[aw.schueler_id].kommentar = aw.kommentar;
-                        timers[aw.schueler_id].zeit_differenz = aw.zeit_differenz;
-                    }
-                });
-            }
-            res.json(timers);
-        });
+        res.json(timers);
     });
 });
 
-// Auswertungs-Export Endpoint
+// Auswertungs-Export
 app.get('/api/auswertung', requireAuth, (req, res) => {
     db.all('SELECT * FROM Pruefer_Auswertung ORDER BY klasse, nachname, vorname', [], (err, rows) => {
         if (err) return res.status(500).json({ error: err.message });
@@ -384,26 +420,26 @@ app.get('/home', requireAuth, async (req, res) => {
             const sid = zweig + '_' + (s.rowid || i);
             const farbe = zweigFarben[zweig] || '#666';
             const tf = (zweig === 'elektrotechnik' || zweig === 'wirtschaft') ? '#333' : '#fff';
-            return `<div class="schueler-item" id="card-${sid}" data-sid="${sid}" style="border-left-color:${farbe}">
-                <div class="timer-progress-bg" id="progress-${sid}"></div>
-                <div class="card-content">
-                    <div class="schueler-header">
-                        <div class="schueler-name-container">
-                            <span class="schueler-name">${s.vorname || ''} ${s.nachname || ''}</span>
-                            ${s.klasse ? `<span class="klassen-badge" style="background:${farbe};color:${tf}">${s.klasse}</span>` : ''}
-                            <span class="timer-badge" id="badge-${sid}"></span>
-                        </div>
-                        <div class="schueler-meta">
-                            ${s.fach ? `<span class="meta-tag">${s.fach}</span>` : ''}
-                            ${s.pruefer ? `<span class="meta-tag">${s.pruefer}</span>` : ''}
-                            ${s.datum ? `<span class="meta-tag datum">${s.datum}</span>` : ''}
-                        </div>
-                    </div>
-                    <div class="expand-hint" id="hint-${sid}">▼</div>
-                    <div class="expanded-section" id="exp-${sid}">
-                        <div class="expanded-content" id="expcontent-${sid}"></div>
-                    </div>
-                </div></div>`;
+            return '<div class="schueler-item" id="card-' + sid + '" data-sid="' + sid + '" style="border-left-color:' + farbe + '">'
+                + '<div class="timer-progress-bg" id="progress-' + sid + '"></div>'
+                + '<div class="card-content">'
+                +   '<div class="schueler-header">'
+                +     '<div class="schueler-name-container">'
+                +       '<span class="schueler-name">' + (s.vorname || '') + ' ' + (s.nachname || '') + '</span>'
+                +       (s.klasse ? '<span class="klassen-badge" style="background:' + farbe + ';color:' + tf + '">' + s.klasse + '</span>' : '')
+                +       '<span class="timer-badge" id="badge-' + sid + '"></span>'
+                +     '</div>'
+                +     '<div class="schueler-meta">'
+                +       (s.fach ? '<span class="meta-tag">' + s.fach + '</span>' : '')
+                +       (s.pruefer ? '<span class="meta-tag">' + s.pruefer + '</span>' : '')
+                +       (s.datum ? '<span class="meta-tag datum">' + s.datum + '</span>' : '')
+                +     '</div>'
+                +   '</div>'
+                +   '<div class="expand-hint" id="hint-' + sid + '">▼</div>'
+                +   '<div class="expanded-section" id="exp-' + sid + '">'
+                +     '<div class="expanded-content" id="expcontent-' + sid + '"></div>'
+                +   '</div>'
+                + '</div></div>';
         }).join('');
 
         res.send(`<!DOCTYPE html>
@@ -421,7 +457,6 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:#07175e;min-height:100vh
 .logout-btn:hover{background:rgba(255,255,255,.25)}
 .schueler-liste{max-width:900px;margin:0 auto}
 
-/* ===== KOMPAKTE CARDS ===== */
 .schueler-item{position:relative;margin:6px 0;border-radius:8px;border-left:4px solid #666;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.1);cursor:pointer;overflow:hidden;transition:box-shadow .2s,transform .15s}
 .schueler-item:hover{transform:translateX(3px);box-shadow:0 2px 8px rgba(0,0,0,.15)}
 .schueler-item.expanded{transform:none;box-shadow:0 4px 16px rgba(0,0,0,.2)}
@@ -451,7 +486,6 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:#07175e;min-height:100vh
 .schueler-item.expanded .expanded-section{max-height:600px}
 .expanded-content{border-top:1px solid rgba(0,0,0,.08);padding-top:12px;margin-top:8px}
 
-/* Timer */
 .timer-display{text-align:center;margin-bottom:10px}
 .timer-time{font-size:2.2em;font-weight:700;color:#222;font-variant-numeric:tabular-nums;letter-spacing:2px}
 .timer-label{font-size:.85em;color:#555;margin-top:2px}
@@ -469,7 +503,6 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:#07175e;min-height:100vh
 .btn-finish{background:#4caf50;color:#fff}
 .btn-finish:disabled{background:#ccc;color:#888;cursor:not-allowed;transform:none;box-shadow:none}
 
-/* Kompaktes Formular */
 .exam-form{margin-top:12px;padding:12px;background:rgba(0,0,0,.03);border-radius:8px;border:1px solid #e0e0e0}
 .exam-form h3{margin-bottom:8px;color:#333;text-align:center;font-size:1em}
 .form-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
@@ -479,9 +512,6 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:#07175e;min-height:100vh
 .form-field textarea{resize:vertical;min-height:40px}
 .form-field.full{grid-column:1/-1}
 .pflicht{color:#c0392b}
-.zeit-info{text-align:center;margin:8px 0;padding:6px;border-radius:6px;font-weight:700;font-size:.95em}
-.zeit-info.over{background:#ffebee;color:#c0392b}
-.zeit-info.under{background:#e8f5e9;color:#2e7d32}
 
 .done-card{text-align:center;padding:12px}
 .done-card h3{color:#4caf50;margin-bottom:6px;font-size:1.1em}
@@ -489,7 +519,6 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:#07175e;min-height:100vh
 .done-info div{padding:5px 8px;background:rgba(0,0,0,.03);border-radius:5px;font-size:.9em}
 .dl{font-weight:700;color:#222}
 
-/* Confirm Overlay */
 .confirm-overlay{display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,.5);z-index:1000;justify-content:center;align-items:center}
 .confirm-overlay.active{display:flex}
 .confirm-box{background:#fff;border-radius:12px;padding:24px 30px;max-width:380px;text-align:center;box-shadow:0 10px 40px rgba(0,0,0,.3)}
@@ -500,7 +529,6 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:#07175e;min-height:100vh
 .cbtn-yes{background:#f44336;color:#fff}
 .cbtn-no{background:#9e9e9e;color:#fff}
 
-/* Widget */
 .next-exam-widget{position:fixed;top:15px;right:15px;width:280px;background:#fff;border-radius:10px;box-shadow:0 6px 24px rgba(0,0,0,.25);z-index:500;overflow:hidden;user-select:none}
 .new-header{padding:8px 14px;font-weight:700;font-size:.9em;color:#fff;background:#333;display:flex;justify-content:space-between;align-items:center;cursor:grab}
 .new-header:active{cursor:grabbing}
@@ -548,16 +576,16 @@ ${schueler.length > 0 ? '<div class="schueler-liste">' + cardsHtml + '</div>' : 
 
 <!-- Schüler-Daten für JS -->
 <script>var SCHUELER_DATA = ${JSON.stringify(schueler.map((s,i) => {
-            const zweig = zweigZuordnung[s.klasse] || 'elektronik';
+            const zw = zweigZuordnung[s.klasse] || 'elektronik';
             return {
-                sid: zweig + '_' + (s.rowid || i),
+                sid: zw + '_' + (s.rowid || i),
                 vorname: s.vorname || '', nachname: s.nachname || '',
                 klasse: s.klasse || '', fach: s.fach || '',
                 pruefer: s.pruefer || '', beisitz: s.beisitz || '',
                 datum: s.datum || '',
                 prep_start: s.prep_start || s.rep_start || '',
                 exam_start: s.exam_start || '', exam_end: s.exam_end || '',
-                zweig: zweig
+                zweig: zw
             };
         }))};
 var ZWEIG_FARBEN = ${JSON.stringify(zweigFarben)};
@@ -567,7 +595,7 @@ var ZWEIG_FARBEN = ${JSON.stringify(zweigFarben)};
 <div class="confirm-overlay" id="confirmOverlay">
   <div class="confirm-box">
     <h3>Wirklich zurücksetzen?</h3>
-    <p id="confirmText">Alle Daten für diesen Schüler gehen verloren.</p>
+    <p id="confirmText">Alle Daten gehen verloren.</p>
     <div class="cbtns">
       <button class="cbtn-yes" id="confirmYes">Ja, zurücksetzen</button>
       <button class="cbtn-no" id="confirmNo">Abbrechen</button>
@@ -583,7 +611,13 @@ var T = {};
 var lastRenderedState = {};
 
 function g(sid){
-  if(!T[sid]) T[sid]={state:'idle',rem:PREP,iid:null,examState:'idle',examRem:EXAM,eiid:null,note:null,themen:null,komm:'',zeitDiff:null};
+  if(!T[sid]) T[sid]={
+    state:'idle', rem:PREP, iid:null,
+    examState:'idle', examRem:EXAM, eiid:null,
+    note:null, themen:null, komm:'',
+    examStartedAt:null,
+    pruefDauer:null
+  };
   return T[sid];
 }
 function fmt(s){
@@ -599,11 +633,18 @@ function examColor(p){
   var r=Math.round(240+(76-240)*p),gg=Math.round(194+(175-194)*p),b=Math.round(48+(80-48)*p);
   return 'rgba('+r+','+gg+','+b+',0.4)';
 }
-
-// Schüler-Info finden
 function findSchueler(sid){
   for(var i=0;i<SCHUELER_DATA.length;i++){if(SCHUELER_DATA[i].sid===sid) return SCHUELER_DATA[i];}
   return null;
+}
+function nowHHMM(){
+  var d=new Date();
+  return (d.getHours()<10?'0':'')+d.getHours()+':'+(d.getMinutes()<10?'0':'')+d.getMinutes();
+}
+function fmtDauer(sek){
+  sek=Math.round(Math.abs(sek));
+  var m=Math.floor(sek/60),s=sek%60;
+  return (m<10?'0':'')+m+':'+(s<10?'0':'')+s;
 }
 
 function tickUpdate(sid){
@@ -689,17 +730,12 @@ function render(sid){
   else if(t.examState==='done'){
     prog.style.width='100%';prog.style.backgroundColor='rgba(76,175,80,0.3)';
     badge.className='timer-badge visible st-done';badge.textContent='Fertig ✓';
-    var zd=t.zeitDiff,zdText='',zdClass='';
-    if(zd!==null&&zd!==undefined){
-      if(zd>0){zdText=fmt(zd)+' früher';zdClass='under';}
-      else if(zd<0){zdText=fmt(Math.abs(zd))+' überzogen';zdClass='over';}
-      else{zdText='Genau in der Zeit';zdClass='under';}
-    }
     html='<div class="done-card"><h3>Abgeschlossen ✓</h3>'
-      +(zdText?'<div class="zeit-info '+zdClass+'">'+zdText+'</div>':'')
       +'<div class="done-info">'
       +'<div><span class="dl">Note:</span> '+t.note+'</div>'
       +'<div><span class="dl">Themenpool:</span> '+t.themen+'</div>'
+      +(t.examStartedAt?'<div><span class="dl">Gestartet:</span> '+t.examStartedAt+' Uhr</div>':'')
+      +(t.pruefDauer?'<div><span class="dl">Dauer:</span> '+t.pruefDauer+'</div>':'')
       +(t.komm?'<div style="grid-column:1/-1"><span class="dl">Kommentar:</span> '+t.komm+'</div>':'')
       +'</div>'
       +'<div class="timer-buttons" style="margin-top:10px"><button class="timer-btn btn-reset" data-action="reset" data-sid="'+sid+'">Reset</button></div>'
@@ -723,7 +759,6 @@ function examFormHtml(sid,t){
     +'</div>';
 }
 
-// Ticks
 function prepTick(sid){
   var t=g(sid);if(t.state!=='running')return;
   t.rem=Math.max(0,t.rem-1);
@@ -738,7 +773,7 @@ function examTick(sid){
 function api(sid,action,body){
   var o={method:'POST',headers:{'Content-Type':'application/json'}};
   if(body)o.body=JSON.stringify(body);
-  fetch('/api/timer/'+sid+'/'+action,o).catch(function(e){console.warn('Sync:',e);});
+  return fetch('/api/timer/'+sid+'/'+action,o).then(function(r){return r.json();}).catch(function(e){console.warn('Sync:',e);return {};});
 }
 
 function sortCards(){
@@ -751,7 +786,6 @@ function sortCards(){
   cards.forEach(function(c){liste.appendChild(c);});
 }
 
-// Confirm Reset
 var pendingResetSid=null;
 var overlay=document.getElementById('confirmOverlay');
 document.getElementById('confirmYes').addEventListener('click',function(){
@@ -760,7 +794,7 @@ document.getElementById('confirmYes').addEventListener('click',function(){
     if(t.iid){clearInterval(t.iid);t.iid=null;}
     if(t.eiid){clearInterval(t.eiid);t.eiid=null;}
     t.state='idle';t.rem=PREP;t.examState='idle';t.examRem=EXAM;
-    t.note=null;t.themen=null;t.komm='';t.zeitDiff=null;
+    t.note=null;t.themen=null;t.komm='';t.examStartedAt=null;t.pruefDauer=null;
     render(pendingResetSid);api(pendingResetSid,'reset');sortCards();
   }
   overlay.classList.remove('active');pendingResetSid=null;
@@ -769,7 +803,6 @@ document.getElementById('confirmNo').addEventListener('click',function(){
   overlay.classList.remove('active');pendingResetSid=null;
 });
 
-// Event Delegation
 document.addEventListener('click',function(e){
   var btn=e.target.closest('.timer-btn');
   if(btn){
@@ -801,16 +834,18 @@ document.addEventListener('click',function(e){
       var card=document.getElementById('card-'+sid);
       var nameEl=card?card.querySelector('.schueler-name'):null;
       var sname=nameEl?nameEl.textContent:'diesen Schüler';
-      document.getElementById('confirmText').textContent='"'+sname.trim()+'" wirklich zurücksetzen? Alle Daten gehen verloren.';
+      document.getElementById('confirmText').textContent='"'+sname.trim()+'" zurücksetzen? Alle Daten gehen verloren.';
       pendingResetSid=sid;overlay.classList.add('active');
     }
     else if(action==='exam_start'){
       t.examState='running';t.examRem=EXAM;
+      t.examStartedAt=nowHHMM();
       if(t.eiid)clearInterval(t.eiid);
       t.eiid=setInterval(function(){examTick(sid);},1000);
       var card2=document.getElementById('card-'+sid);
       if(card2)card2.classList.add('expanded');
-      render(sid);api(sid,'exam_start');
+      render(sid);
+      api(sid,'exam_start');
     }
     else if(action==='exam_pause'){
       t.examState='paused';if(t.eiid){clearInterval(t.eiid);t.eiid=null;}
@@ -830,14 +865,18 @@ document.addEventListener('click',function(e){
       var komm=kommEl?kommEl.value:'';
       if(!note||!themen){alert('Bitte Note und Themenpool auswählen!');return;}
       if(t.eiid){clearInterval(t.eiid);t.eiid=null;}
-      t.examState='done';t.note=parseInt(note);t.themen=parseInt(themen);t.komm=komm;t.zeitDiff=t.examRem;
+      t.examState='done';t.note=parseInt(note);t.themen=parseInt(themen);t.komm=komm;
+      var dauerSek=EXAM-t.examRem;
+      t.pruefDauer=fmtDauer(dauerSek);
       render(sid);
-      // Schüler-Info mitsenden für Pruefer_Auswertung
       var info=findSchueler(sid)||{};
       api(sid,'exam_finish',{
-        note:t.note, themenpool:t.themen, kommentar:komm, zeit_differenz:t.zeitDiff,
+        note:t.note, themenpool:t.themen, kommentar:komm,
+        pruefungsdauer:t.pruefDauer,
+        tatsaechlich_gestartet:t.examStartedAt||'',
         vorname:info.vorname, nachname:info.nachname, klasse:info.klasse,
-        fach:info.fach, pruefer:info.pruefer, beisitz:info.beisitz, datum:info.datum
+        fach:info.fach, pruefer:info.pruefer, beisitz:info.beisitz,
+        datum:info.datum, geplant_start:info.exam_start||''
       });
       sortCards();
     }
@@ -862,12 +901,10 @@ document.addEventListener('input',function(e){
 });
 document.addEventListener('mousedown',function(e){if(e.target.closest('.exam-form'))e.stopPropagation();},true);
 
-// Init
 document.querySelectorAll('.schueler-item').forEach(function(c){
   var sid=c.getAttribute('data-sid');if(sid)render(sid);
 });
 
-// Load from Server (ALLE Timer, kein Zweig-Filter)
 fetch('/api/timers/all')
   .then(function(r){return r.json();})
   .then(function(data){
@@ -878,7 +915,9 @@ fetch('/api/timers/all')
       t.examState=info.exam_state||'idle';
       t.examRem=info.exam_remaining!==undefined?info.exam_remaining:EXAM;
       t.note=info.note||null;t.themen=info.themenpool||null;
-      t.komm=info.kommentar||'';t.zeitDiff=info.zeit_differenz;
+      t.komm=info.kommentar||'';
+      t.examStartedAt=info.tatsaechlich_gestartet||null;
+      t.pruefDauer=info.pruefungsdauer||null;
       if(t.state==='prep_done')t.rem=0;
       if(t.state==='running'&&t.rem>0){(function(id){t.iid=setInterval(function(){prepTick(id);},1000);})(sid);}
       if(t.examState==='running'){(function(id){t.eiid=setInterval(function(){examTick(id);},1000);})(sid);}
@@ -904,7 +943,6 @@ fetch('/api/timers/all')
     toggleBtn.textContent=isCollapsed?'+':'−';
   });
 
-  // Drag
   var isDragging=false,dragOffX=0,dragOffY=0;
   header.addEventListener('mousedown',function(e){
     if(e.target===toggleBtn)return;isDragging=true;
