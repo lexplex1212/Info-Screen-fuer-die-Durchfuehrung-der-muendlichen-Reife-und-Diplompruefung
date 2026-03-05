@@ -25,12 +25,12 @@ const db = new sqlite3.Database(dbPath, (err) => {
     } else {
         console.log('Verbindung zur Datenbank termine.db erfolgreich hergestellt');
         db.run(`CREATE TABLE IF NOT EXISTS timer_status (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                schueler_id TEXT UNIQUE NOT NULL,
-                started_at INTEGER, paused_at INTEGER,
-                remaining_seconds REAL NOT NULL DEFAULT ${VORBEREITUNGS_TIMER},
-                state TEXT NOT NULL DEFAULT 'idle'
-        )`, () => {
+                                                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                                                            schueler_id TEXT UNIQUE NOT NULL,
+                                                            started_at INTEGER, paused_at INTEGER,
+                                                            remaining_seconds REAL NOT NULL DEFAULT ${VORBEREITUNGS_TIMER},
+                                                            state TEXT NOT NULL DEFAULT 'idle'
+                )`, () => {
             const newCols = [
                 ['exam_started_at', 'INTEGER'],
                 ['exam_remaining', 'REAL DEFAULT ' + PRUEFUNGS_TIMER],
@@ -44,14 +44,14 @@ const db = new sqlite3.Database(dbPath, (err) => {
                     done++;
                     if (done === newCols.length) {
                         db.run(`CREATE TABLE IF NOT EXISTS Pruefungs_Auswertung (
-                            id INTEGER PRIMARY KEY AUTOINCREMENT,
-                            schueler_id TEXT NOT NULL,
-                            Klasse TEXT, Vorname TEXT, Nachname TEXT,
-                            Pruefung_geplant TEXT,
-                            Pruefung_real TEXT,
-                            Pruefungsdauer TEXT,
-                            Themenpool INTEGER, Note INTEGER, Kommentar TEXT
-                        )`, () => { console.log('Alle Tabellen bereit'); initAlleTimer(); });
+                                                                                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                                                                                    schueler_id TEXT NOT NULL,
+                                                                                    Klasse TEXT, Vorname TEXT, Nachname TEXT,
+                                                                                    Pruefung_geplant TEXT,
+                                                                                    Pruefung_real TEXT,
+                                                                                    Pruefungsdauer TEXT,
+                                                                                    Themenpool INTEGER, Note INTEGER, Kommentar TEXT
+                                )`, () => { console.log('Alle Tabellen bereit'); initAlleTimer(); });
                     }
                 });
             });
@@ -443,7 +443,9 @@ document.addEventListener('change',function(e){var el=e.target;if(el.matches('se
 document.addEventListener('input',function(e){var el=e.target;if(el.matches('textarea[data-field]'))g(el.getAttribute('data-sid')).komm=el.value;});
 document.addEventListener('mousedown',function(e){if(e.target.closest('.exam-form'))e.stopPropagation();},true);
 document.querySelectorAll('.schueler-item').forEach(function(c){var sid=c.getAttribute('data-sid');if(sid)render(sid);});
-fetch('/api/timers/all').then(function(r){return r.json();}).then(function(data){for(var sid in data){if(!data.hasOwnProperty(sid))continue;var info=data[sid],t=g(sid);t.rem=Math.max(0,info.remaining_seconds);t.state=info.state||'idle';t.examState=info.exam_state||'idle';t.examRem=info.exam_remaining!==undefined?info.exam_remaining:EXAM;t.note=null;t.themen=null;t.komm='';t.zeitDiff=null;if(t.state==='prep_done')t.rem=0;if(t.state==='running'&&t.rem>0){(function(id){t.iid=setInterval(function(){prepTick(id);},1000);})(sid);}if(t.examState==='running'){(function(id){t.eiid=setInterval(function(){examTick(id);},1000);})(sid);}render(sid);}sortCards();}).catch(function(e){console.warn('Load:',e);});
+fetch('/api/timers/all').then(function(r){return r.json();}).then(function(data){applyServerData(data);}).catch(function(e){console.warn('Load:',e);});
+function applyServerData(data){var changed=false;for(var sid in data){if(!data.hasOwnProperty(sid))continue;var info=data[sid],t=g(sid);var oldKey=t.state+'|'+t.examState;var newState=info.state||'idle';var newExam=info.exam_state||'idle';if(newState==='prep_done'&&t.state==='running'){if(t.iid){clearInterval(t.iid);t.iid=null;}}if(newExam==='done'&&t.examState!=='done'){if(t.eiid){clearInterval(t.eiid);t.eiid=null;}}t.rem=Math.max(0,info.remaining_seconds);t.state=newState;t.examState=newExam;t.examRem=info.exam_remaining!==undefined?info.exam_remaining:EXAM;if(t.state==='prep_done')t.rem=0;if(t.state==='running'&&!t.iid&&t.rem>0){(function(id){t.iid=setInterval(function(){prepTick(id);},1000);})(sid);}if(t.state!=='running'&&t.iid){clearInterval(t.iid);t.iid=null;}if(t.examState==='running'&&!t.eiid){(function(id){t.eiid=setInterval(function(){examTick(id);},1000);})(sid);}if(t.examState!=='running'&&t.eiid){clearInterval(t.eiid);t.eiid=null;}var newKey=t.state+'|'+t.examState;if(oldKey!==newKey){render(sid);changed=true;}}if(changed)sortCards();}
+setInterval(function(){fetch('/api/timers/all').then(function(r){return r.json();}).then(function(data){applyServerData(data);}).catch(function(){});},5000);
 })();
 </script></body></html>`);
     } catch(err) { console.error(err); res.status(500).send('Fehler'); }
