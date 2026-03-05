@@ -25,12 +25,12 @@ const db = new sqlite3.Database(dbPath, (err) => {
     } else {
         console.log('Verbindung zur Datenbank termine.db erfolgreich hergestellt');
         db.run(`CREATE TABLE IF NOT EXISTS timer_status (
-                                                            id INTEGER PRIMARY KEY AUTOINCREMENT,
-                                                            schueler_id TEXT UNIQUE NOT NULL,
-                                                            started_at INTEGER, paused_at INTEGER,
-                                                            remaining_seconds REAL NOT NULL DEFAULT ${VORBEREITUNGS_TIMER},
-                                                            state TEXT NOT NULL DEFAULT 'idle'
-                )`, () => {
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                schueler_id TEXT UNIQUE NOT NULL,
+                started_at INTEGER, paused_at INTEGER,
+                remaining_seconds REAL NOT NULL DEFAULT ${VORBEREITUNGS_TIMER},
+                state TEXT NOT NULL DEFAULT 'idle'
+        )`, () => {
             const newCols = [
                 ['exam_started_at', 'INTEGER'],
                 ['exam_remaining', 'REAL DEFAULT ' + PRUEFUNGS_TIMER],
@@ -44,14 +44,14 @@ const db = new sqlite3.Database(dbPath, (err) => {
                     done++;
                     if (done === newCols.length) {
                         db.run(`CREATE TABLE IF NOT EXISTS Pruefungs_Auswertung (
-                                                                                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                                                                                    schueler_id TEXT NOT NULL,
-                                                                                    Klasse TEXT, Vorname TEXT, Nachname TEXT,
-                                                                                    Pruefung_geplant TEXT,
-                                                                                    Pruefung_real TEXT,
-                                                                                    Pruefungsdauer TEXT,
-                                                                                    Themenpool INTEGER, Note INTEGER, Kommentar TEXT
-                                )`, () => { console.log('Alle Tabellen bereit'); initAlleTimer(); });
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            schueler_id TEXT NOT NULL,
+                            Klasse TEXT, Vorname TEXT, Nachname TEXT,
+                            Pruefung_geplant TEXT,
+                            Pruefung_real TEXT,
+                            Pruefungsdauer TEXT,
+                            Themenpool INTEGER, Note INTEGER, Kommentar TEXT
+                        )`, () => { console.log('Alle Tabellen bereit'); initAlleTimer(); });
                     }
                 });
             });
@@ -231,27 +231,27 @@ function globalWidgetHtml() {
   </div>
 </div>
 <style>
-.next-exam-widget{position:fixed;top:20px;right:20px;width:320px;background:#fff;border-radius:14px;box-shadow:0 8px 30px rgba(0,0,0,.25);z-index:9999;overflow:hidden;user-select:none}
-.new-header{padding:12px 18px;font-weight:700;font-size:1.05em;color:#fff;background:#333;display:flex;justify-content:space-between;align-items:center;cursor:grab}
+.next-exam-widget{position:fixed;top:20px;right:20px;width:240px;background:#fff;border-radius:12px;box-shadow:0 6px 24px rgba(0,0,0,.22);z-index:9999;overflow:hidden;user-select:none}
+.new-header{padding:8px 14px;font-weight:700;font-size:.95em;color:#fff;background:#333;display:flex;justify-content:space-between;align-items:center;cursor:grab}
 .new-header:active{cursor:grabbing}.wh-text{pointer-events:none}
-.widget-toggle{background:none;border:2px solid rgba(255,255,255,.5);color:#fff;width:30px;height:30px;border-radius:50%;font-size:1.2em;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all .2s}
+.widget-toggle{background:none;border:2px solid rgba(255,255,255,.5);color:#fff;width:26px;height:26px;border-radius:50%;font-size:1.1em;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all .2s}
 .widget-toggle:hover{background:rgba(255,255,255,.2);border-color:#fff}
-.widget-body{transition:max-height .3s ease,opacity .3s ease;max-height:400px;opacity:1;overflow:hidden}
+.widget-body{transition:max-height .3s ease,opacity .3s ease;max-height:300px;opacity:1;overflow:hidden}
 .widget-body.collapsed{max-height:0;opacity:0}
-#nextExamContent{padding:16px}
-.new-loading{text-align:center;color:#999;padding:10px}
-.nex-countdown{font-size:2.2em;font-weight:700;text-align:center;margin:8px 0;font-variant-numeric:tabular-nums;letter-spacing:2px}
+#nextExamContent{padding:10px 12px}
+.new-loading{text-align:center;color:#999;padding:8px;font-size:.9em}
+.nex-countdown{font-size:1.8em;font-weight:700;text-align:center;margin:4px 0;font-variant-numeric:tabular-nums;letter-spacing:1px}
 .nex-countdown.soon{color:#e74c3c}.nex-countdown.normal{color:#333}
-.nex-name{font-size:1.15em;font-weight:700;color:#222;text-align:center;margin-bottom:4px}
-.nex-badge{display:inline-block;padding:3px 10px;border-radius:12px;font-size:.8em;font-weight:700}
-.nex-details{text-align:center;color:#555;font-size:.9em;margin-top:8px;line-height:1.7}
-.nex-done{text-align:center;color:#4caf50;font-weight:700;font-size:1.1em;padding:15px 0}
-.nex-status{display:inline-block;margin-top:6px;font-size:.85em;padding:4px 10px;border-radius:8px}
+.nex-name{font-size:1em;font-weight:700;color:#222;text-align:center}
+.nex-badge{display:inline-block;padding:2px 8px;border-radius:10px;font-size:.75em;font-weight:700}
+.nex-info{text-align:center;color:#666;font-size:.8em;margin-top:4px}
+.nex-done{text-align:center;color:#4caf50;font-weight:700;font-size:1em;padding:10px 0}
+.nex-status{display:inline-block;font-size:.8em;padding:3px 8px;border-radius:6px;margin-top:2px}
 .nex-status.waiting{background:#fff3cd;color:#856404}
 .nex-status.call-student{background:#f8d7da;color:#721c24;animation:pulse-call 1.5s infinite}
-.nex-call-msg{text-align:center;margin-top:10px;padding:10px 14px;background:#fff3cd;border-radius:8px;color:#856404;font-size:.9em;line-height:1.4}
+.nex-call-msg{text-align:center;margin-top:6px;padding:8px 10px;background:#fff3cd;border-radius:6px;color:#856404;font-size:.8em;line-height:1.3}
 @keyframes pulse-call{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.7;transform:scale(1.05)}}
-@media(max-width:600px){.next-exam-widget{position:relative;top:auto!important;right:auto!important;left:auto!important;width:100%;margin:10px auto;border-radius:12px}}
+@media(max-width:600px){.next-exam-widget{position:relative;top:auto!important;right:auto!important;left:auto!important;width:100%;margin:10px auto;border-radius:10px}}
 </style>
 <script>
 (function(){
@@ -281,10 +281,10 @@ function globalWidgetHtml() {
       if(diff>-7200000&&diff<bestDiff){bestDiff=diff;best={s:s,diff:diff};}
     });
     if(!best){content.innerHTML='<div class="nex-done">Keine weiteren Pr\\u00fcfungen</div>';return;}
-    var s=best.s,diff=best.diff,cdClass,cdText,label,statusHtml,extraHtml='';
-    if(diff>0){cdText=fcd(diff);cdClass=diff<600000?'soon':'normal';label='Vorbereitung beginnt in';statusHtml='<div style="text-align:center"><span class="nex-status waiting">\\u23F3 Wartet</span></div>';}
-    else{cdText='JETZT';cdClass='soon';label='';statusHtml='<div style="text-align:center"><span class="nex-status call-student">\\uD83D\\uDCE2 Sch\\u00fcler rufen!</span></div>';extraHtml='<div class="nex-call-msg">Bitte rufen Sie den Sch\\u00fcler zur Vorbereitung und dr\\u00fccken Sie <b>\\u201EVorbereitung starten\\u201C</b></div>';}
-    content.innerHTML='<div class="nex-name">'+s.vorname+' '+s.nachname+'</div><div style="text-align:center;margin:4px 0"><span class="nex-badge" style="background:'+s.farbe+';color:'+s.textFarbe+'">'+s.klasse+'</span>'+(s.fach?' <span style="color:#666;font-size:.9em">'+s.fach+'</span>':'')+'</div>'+statusHtml+'<div class="nex-countdown '+cdClass+'">'+cdText+'</div>'+(label?'<div class="nex-details">'+label+(s.prep_start?' \\u00B7 Vorb: '+s.prep_start:'')+(s.exam_start?' \\u00B7 Pr\\u00fcf: '+s.exam_start:'')+(s.pruefer?' \\u00B7 '+s.pruefer:'')+'</div>':'')+extraHtml;
+    var s=best.s,diff=best.diff,cdClass,cdText,statusHtml,extraHtml='';
+    if(diff>0){cdText=fcd(diff);cdClass=diff<600000?'soon':'normal';statusHtml='<div style="text-align:center"><span class="nex-status waiting">Vorbereitung beginnt um '+s.prep_start+'</span></div>';}
+    else{cdText='JETZT';cdClass='soon';statusHtml='<div style="text-align:center"><span class="nex-status call-student">\\uD83D\\uDCE2 Sch\\u00fcler rufen!</span></div>';extraHtml='<div class="nex-call-msg">Bitte <b>\\u201EVorbereitung starten\\u201C</b> dr\\u00fccken</div>';}
+    content.innerHTML='<div class="nex-name">'+s.vorname+' '+s.nachname+'</div><div style="text-align:center;margin:2px 0"><span class="nex-badge" style="background:'+s.farbe+';color:'+s.textFarbe+'">'+s.klasse+'</span>'+(s.fach?' <span style="color:#888;font-size:.8em">'+s.fach+'</span>':'')+'</div>'+statusHtml+'<div class="nex-countdown '+cdClass+'">'+cdText+'</div>'+extraHtml;
   }
   loadData();setInterval(loadData,10000);setInterval(update,1000);
 })();
