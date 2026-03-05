@@ -430,8 +430,10 @@ app.get('/home', requireAuth, async (req, res) => {
                 +       '<span class="timer-badge" id="badge-' + sid + '"></span>'
                 +     '</div>'
                 +     '<div class="schueler-meta">'
-                +       (s.fach ? '<span class="meta-tag">' + s.fach + '</span>' : '')
-                +       (s.pruefer ? '<span class="meta-tag">' + s.pruefer + '</span>' : '')
+                +       (s.fach ? '<span class="meta-tag"><b>Fach:</b> ' + s.fach + '</span>' : '')
+                +       (s.pruefer ? '<span class="meta-tag"><b>Prüfer:</b> ' + s.pruefer + '</span>' : '')
+                +       (s.beisitz ? '<span class="meta-tag"><b>Beisitz:</b> ' + s.beisitz + '</span>' : '')
+                +       (s.exam_start ? '<span class="meta-tag pruefung"><b>Prüfung:</b> ' + s.exam_start + (s.exam_end ? ' - ' + s.exam_end : '') + '</span>' : '')
                 +       (s.datum ? '<span class="meta-tag datum">' + s.datum + '</span>' : '')
                 +     '</div>'
                 +   '</div>'
@@ -471,6 +473,7 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:#07175e;min-height:100vh
 .schueler-meta{display:flex;gap:6px;flex-wrap:wrap}
 .meta-tag{background:#f0f0f0;color:#555;padding:2px 8px;border-radius:10px;font-size:.72em}
 .meta-tag.datum{background:#e3f2fd;color:#1565c0;font-weight:600}
+.meta-tag.pruefung{background:#f3e5f5;color:#7b1fa2;font-weight:600}
 
 .timer-badge{display:none;padding:2px 10px;border-radius:10px;font-size:.75em;font-weight:700}
 .timer-badge.visible{display:inline-block}
