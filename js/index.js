@@ -446,18 +446,22 @@ document.addEventListener('click',function(e){var btn=e.target.closest('.timer-b
 document.addEventListener('change',function(e){var el=e.target;if(el.matches('select[data-field]')){var sid=el.getAttribute('data-sid'),f=el.getAttribute('data-field'),t=g(sid);if(f==='note')t.note=parseInt(el.value)||null;if(f==='themen')t.themen=parseInt(el.value)||null;}});
 document.addEventListener('input',function(e){var el=e.target;if(el.matches('textarea[data-field]'))g(el.getAttribute('data-sid')).komm=el.value;});
 document.addEventListener('mousedown',function(e){if(e.target.closest('.exam-form'))e.stopPropagation();},true);
-document.querySelectorAll('.schueler-item').forEach(function(c){var sid=c.getAttribute('data-sid');if(sid)render(sid);});
-fetch('/api/timers/all').then(function(r){return r.json();}).then(function(data){applyServerData(data,true);}).catch(function(e){console.warn('Load:',e);});
-function applyServerData(data,isInit){var changed=false;for(var sid in data){if(!data.hasOwnProperty(sid))continue;var info=data[sid],t=g(sid);var oldKey=t.state+'|'+t.examState;var newState=info.state||'idle';var newExam=info.exam_state||'idle';
-t.state=newState;t.examState=newExam;
+// Initial render wird durch applyServerData gemacht
+fetch('/api/timers/all').then(function(r){return r.json();}).then(function(data){applyServerData(data);}).catch(function(e){console.warn('Load:',e);});
+function applyServerData(data){for(var sid in data){if(!data.hasOwnProperty(sid))continue;var info=data[sid],t=g(sid);
+t.state=info.state||'idle';
+t.examState=info.exam_state||'idle';
 t.rem=Math.max(0,info.remaining_seconds);
 t.examRem=info.exam_remaining!==undefined?info.exam_remaining:EXAM;
-if(info.note)t.note=info.note;if(info.themenpool)t.themen=info.themenpool;if(info.kommentar)t.komm=info.kommentar;if(info.zeit_differenz!==undefined&&info.zeit_differenz!==null)t.zeitDiff=info.zeit_differenz;
+t.note=info.note||null;
+t.themen=info.themenpool||null;
+t.komm=info.kommentar||'';
+t.zeitDiff=(info.zeit_differenz!==undefined&&info.zeit_differenz!==null)?info.zeit_differenz:null;
 if(t.state==='prep_done')t.rem=0;
 if(t.state==='running'&&t.rem>0){if(!t.iid){(function(id){t.iid=setInterval(function(){prepTick(id);},1000);})(sid);}}else{if(t.iid){clearInterval(t.iid);t.iid=null;}}
 if(t.examState==='running'){if(!t.eiid){(function(id){t.eiid=setInterval(function(){examTick(id);},1000);})(sid);}}else{if(t.eiid){clearInterval(t.eiid);t.eiid=null;}}
-var newKey=t.state+'|'+t.examState;if(isInit||oldKey!==newKey){render(sid);changed=true;}}if(changed)sortCards();}
-setInterval(function(){fetch('/api/timers/all').then(function(r){return r.json();}).then(function(data){applyServerData(data,false);}).catch(function(){});},3000);
+render(sid);}sortCards();}
+setInterval(function(){fetch('/api/timers/all').then(function(r){return r.json();}).then(function(data){applyServerData(data);}).catch(function(){});},3000);
 })();
 </script></body></html>`);
     } catch(err) { console.error(err); res.status(500).send('Fehler'); }
