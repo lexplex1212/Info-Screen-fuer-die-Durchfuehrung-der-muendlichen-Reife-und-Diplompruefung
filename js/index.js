@@ -11,8 +11,8 @@ require('dotenv').config({ override: true });
 
 
 // Timer-Dauer (Sekunden)
-const VORBEREITUNGS_TIMER = 1200;
-const PRUEFUNGS_TIMER = 720;
+const VORBEREITUNGS_TIMER = 300;
+const PRUEFUNGS_TIMER = 300;
 
 
 // Klassen- & Zweig-Konfiguration
