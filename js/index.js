@@ -10,7 +10,7 @@ const path = require('path');
 require('dotenv').config({ override: true });
 
 
-// Timer-Dauer (Sekunden)
+// Timer-Dauer  (Sekunden)
 const VORBEREITUNGS_TIMER = 120;
 const PRUEFUNGS_TIMER = 120;
 
