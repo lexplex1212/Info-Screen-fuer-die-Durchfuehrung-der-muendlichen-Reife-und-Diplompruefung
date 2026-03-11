@@ -11,8 +11,8 @@ require('dotenv').config({ override: true });
 
 
 // Timer-Dauer (Sekunden)
-const VORBEREITUNGS_TIMER = 1200;
-const PRUEFUNGS_TIMER = 720;
+const VORBEREITUNGS_TIMER = 120;
+const PRUEFUNGS_TIMER = 120;
 
 
 // Klassen- & Zweig-Konfiguration
@@ -527,7 +527,7 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:#07175e;min-height:100vh
 
 <div class="widget" id="widget">
     <div class="widget-head" id="wHead">
-        <span>Naechste Vorbereitung</span>
+        <span>Nächste Vorbereitung</span>
         <button onclick="toggleWidget()" style="background:none;border:1px solid rgba(255,255,255,.5);color:#fff;border-radius:50%;width:24px;height:24px;cursor:pointer" id="wBtn">-</button>
     </div>
     <div class="widget-body" id="wBody">
