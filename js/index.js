@@ -321,7 +321,7 @@ app.post('/api/timer/:id/exam_finish', requireAuth, (req, res) => {
 });
 
 
-// --- API: Alle Timer laden (fuer Frontend-Init) ---
+// --- API: Alle Timer laden (fuer Frontend-Init) --
 
 app.get('/api/timers/all', requireAuth, (req, res) => {
     db.all('SELECT * FROM timer_status', [], (err, rows) => {
