@@ -11,8 +11,8 @@ require('dotenv').config({ override: true });
 
 
 // Timer-Dauer (Sekunden)
-const VORBEREITUNGS_TIMER = 300;
-const PRUEFUNGS_TIMER = 300;
+const VORBEREITUNGS_TIMER = 1200;
+const PRUEFUNGS_TIMER = 720;
 
 
 // Klassen- & Zweig-Konfiguration
@@ -141,7 +141,7 @@ function getAlleSchueler() {
         const alleKlassen = Object.values(klassen).flat();
         const ph = alleKlassen.map(() => '?').join(',');
         db.all(`SELECT rowid, * FROM termine WHERE klasse IN (${ph})
-                ORDER BY klasse, nachname, vorname`, alleKlassen, (err, rows) => {
+                ORDER BY datum, exam_start`, alleKlassen, (err, rows) => {
             resolve(err ? [] : rows);
         });
     });
