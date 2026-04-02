@@ -11,8 +11,8 @@ require('dotenv').config({ override: true });
 
 
 // Timer-Dauer (Sekunden)
-const VORBEREITUNGS_TIMER = 300;
-const PRUEFUNGS_TIMER = 300;
+const VORBEREITUNGS_TIMER = 1200;
+const PRUEFUNGS_TIMER = 720;
 
 
 // Klassen- & Zweig-Konfiguration
@@ -136,12 +136,14 @@ function base64UrlDecode(str) {
     return Buffer.from(str, 'base64').toString('utf8');
 }
 
-function getAlleSchueler() {
+function getAlleSchueler(kuerzel) {
     return new Promise(resolve => {
         const alleKlassen = Object.values(klassen).flat();
         const ph = alleKlassen.map(() => '?').join(',');
+        const k = kuerzel.toUpperCase();
         db.all(`SELECT rowid, * FROM termine WHERE klasse IN (${ph})
-                ORDER BY datum, exam_start`, alleKlassen, (err, rows) => {
+                                               AND (UPPER(pruefer) = ? OR UPPER(beisitz) = ?)
+                ORDER BY datum, exam_start`, [...alleKlassen, k, k], (err, rows) => {
             resolve(err ? [] : rows);
         });
     });
@@ -154,6 +156,15 @@ function getSchuelerInfoFromSid(sid) {
         db.get('SELECT rowid, * FROM termine WHERE rowid = ?', [rowid], (err, row) => {
             resolve(err ? null : row);
         });
+    });
+}
+
+function prueferExistiert(kuerzel) {
+    return new Promise(resolve => {
+        db.get('SELECT id FROM pruefer_login WHERE UPPER(kuerzel) = ?',
+            [kuerzel.toUpperCase()], (err, row) => {
+                resolve(!err && !!row);
+            });
     });
 }
 
@@ -389,7 +400,13 @@ app.get('/auth/callback', async (req, res) => {
             return res.status(403).send('Zugriff verweigert. Nur @ms.bulme.at. <a href="/">Zurück</a>');
         }
 
-        req.session.user = { email };
+        const kuerzel = email.split('@')[0];
+        const istPruefer = await prueferExistiert(kuerzel);
+        if (!istPruefer) {
+            return res.status(403).send('Zugriff verweigert. Sie sind nicht als Prüfer eingetragen. <a href="/">Zurück</a>');
+        }
+
+        req.session.user = { email, kuerzel };
         res.redirect('/home');
     } catch (err) {
         console.error(err.response?.data || err.message);
@@ -406,20 +423,24 @@ app.get('/logout', (req, res) => {
 
 app.get('/home', requireAuth, async (req, res) => {
     try {
-        const schueler = await getAlleSchueler();
+        const kuerzel = req.session.user.kuerzel;
+        const schueler = await getAlleSchueler(kuerzel);
 
         const cardsHtml = schueler.map((s, i) => {
             const zweig = zweigZuordnung[s.klasse] || 'elektronik';
             const sid = zweig + '_' + (s.rowid || i);
             const farbe = zweigFarben[zweig] || '#666';
             const textFarbe = (zweig === 'elektrotechnik' || zweig === 'wirtschaft') ? '#333' : '#fff';
+            const istPruefer = (s.pruefer || '').toUpperCase() === kuerzel.toUpperCase();
+            const beisitzClass = istPruefer ? '' : ' beisitz';
 
-            return `<div class="card" id="card-${sid}" data-sid="${sid}" style="border-left:4px solid ${farbe}">
+            return `<div class="card${beisitzClass}" id="card-${sid}" data-sid="${sid}" data-rolle="${istPruefer ? 'pruefer' : 'beisitz'}" style="border-left:4px solid ${farbe}">
                 <div class="progress" id="progress-${sid}"></div>
                 <div class="card-inner">
                     <div class="card-top">
                         <span class="name">${s.vorname || ''} ${s.nachname || ''}</span>
                         ${s.klasse ? `<span class="badge" style="background:${farbe};color:${textFarbe}">${s.klasse}</span>` : ''}
+                        ${!istPruefer ? '<span class="badge" style="background:#999;color:#fff">Beisitz</span>' : ''}
                         <span class="timer-badge" id="badge-${sid}"></span>
                         <span class="meta">
                             ${s.fach ? `<b>Fach:</b> ${s.fach}` : ''}
@@ -436,6 +457,7 @@ app.get('/home', requireAuth, async (req, res) => {
 
         const schuelerJson = JSON.stringify(schueler.map((s, i) => {
             const zw = zweigZuordnung[s.klasse] || 'elektronik';
+            const istP = (s.pruefer || '').toUpperCase() === kuerzel.toUpperCase();
             return {
                 sid: zw + '_' + (s.rowid || i),
                 vorname: s.vorname || '', nachname: s.nachname || '',
@@ -444,7 +466,8 @@ app.get('/home', requireAuth, async (req, res) => {
                 datum: s.datum || '',
                 prep_start: s.prep_start || s.rep_start || '',
                 exam_start: s.exam_start || '', exam_end: s.exam_end || '',
-                zweig: zw
+                zweig: zw,
+                rolle: istP ? 'pruefer' : 'beisitz'
             };
         }));
 
@@ -464,6 +487,8 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:#07175e;min-height:100vh
 .liste{max-width:900px;margin:0 auto}
 .card{position:relative;margin:6px 0;border-radius:8px;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.1);cursor:pointer;overflow:hidden;transition:box-shadow .2s}
 .card:hover{box-shadow:0 2px 8px rgba(0,0,0,.15)}
+.card.beisitz{opacity:.45;pointer-events:none;cursor:default}
+.card.beisitz .card-inner{background:rgba(240,240,240,.6)}
 .progress{position:absolute;top:0;left:0;height:100%;width:0%;z-index:0;pointer-events:none;transition:width .8s linear}
 .card-inner{position:relative;z-index:1;padding:10px 14px}
 .card-top{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
@@ -520,7 +545,10 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:#07175e;min-height:100vh
 
 <div class="top">
     <h1>Matura Prüfungen</h1>
-    <a href="/logout">Logout</a>
+    <div style="display:flex;gap:10px;align-items:center">
+        <span style="font-size:.85em">${kuerzel.toUpperCase()}</span>
+        <a href="/logout">Logout</a>
+    </div>
 </div>
 
 <div class="liste">${cardsHtml}</div>
@@ -628,6 +656,13 @@ function render(sid) {
     var badge = document.getElementById('badge-' + sid);
     var exp = document.getElementById('exp-' + sid);
     if (!exp) return;
+
+    var info = find(sid);
+    if (info.rolle === 'beisitz') {
+        exp.innerHTML = '<div class="expand-inner"><div style="text-align:center;padding:12px;color:#999;font-size:.9em">Beisitz – nur Einsicht</div></div>';
+        return;
+    }
+
     var h = '<div class="expand-inner">';
 
     if (t.state === 'idle') {
