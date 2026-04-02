@@ -260,6 +260,31 @@ app.post('/api/timer/:id/reset', requireAuth, async (req, res) => {
 });
 
 
+// --- API: Krank / Anwesend ---
+
+app.post('/api/timer/:id/krank', requireAuth, (req, res) => {
+    db.run(`INSERT INTO timer_status (schueler_id, state, remaining_seconds)
+            VALUES (?, 'krank', 0)
+                ON CONFLICT(schueler_id) DO UPDATE SET
+                state='krank', started_at=NULL, paused_at=NULL, remaining_seconds=0`,
+        [req.params.id], err => {
+            if (err) return res.status(500).json({ error: err.message });
+            res.json({ ok: true });
+        });
+});
+
+app.post('/api/timer/:id/anwesend', requireAuth, (req, res) => {
+    db.run(`UPDATE timer_status SET
+                                    state='idle', started_at=NULL, paused_at=NULL,
+                                    remaining_seconds=${VORBEREITUNGS_TIMER}
+            WHERE schueler_id=?`,
+        [req.params.id], err => {
+            if (err) return res.status(500).json({ error: err.message });
+            res.json({ ok: true });
+        });
+});
+
+
 // --- API: Prüfungs-Timer ---
 
 app.post('/api/timer/:id/exam_start', requireAuth, (req, res) => {
@@ -305,7 +330,7 @@ app.post('/api/timer/:id/exam_finish', requireAuth, (req, res) => {
     if (!note || !themenpool) return res.status(400).json({ error: 'Note und Themenpool sind Pflicht' });
 
     db.run(`UPDATE timer_status SET exam_state='done', note=?, themenpool=?,
-                                    kommentar=?, pruefungsdauer=? WHERE schueler_id=?`,
+            kommentar=?, pruefungsdauer=? WHERE schueler_id=?`,
         [note, themenpool, kommentar || '', pruefungsdauer || '', req.params.id], err => {
             if (err) return res.status(500).json({ error: err.message });
 
@@ -314,13 +339,13 @@ app.post('/api/timer/:id/exam_finish', requireAuth, (req, res) => {
                      note, themenpool, kommentar, geplant_start,
                      tatsaechlich_gestartet, pruefungsdauer)
                     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
-                        ON CONFLICT(vorname, nachname, klasse) DO UPDATE SET
-                        fach=excluded.fach, pruefer=excluded.pruefer,
-                                                                      beisitz=excluded.beisitz, datum=excluded.datum,
-                                                                      note=excluded.note, themenpool=excluded.themenpool,
-                                                                      kommentar=excluded.kommentar, geplant_start=excluded.geplant_start,
-                                                                      tatsaechlich_gestartet=excluded.tatsaechlich_gestartet,
-                                                                      pruefungsdauer=excluded.pruefungsdauer`,
+                    ON CONFLICT(vorname, nachname, klasse) DO UPDATE SET
+                    fach=excluded.fach, pruefer=excluded.pruefer,
+                    beisitz=excluded.beisitz, datum=excluded.datum,
+                    note=excluded.note, themenpool=excluded.themenpool,
+                    kommentar=excluded.kommentar, geplant_start=excluded.geplant_start,
+                    tatsaechlich_gestartet=excluded.tatsaechlich_gestartet,
+                    pruefungsdauer=excluded.pruefungsdauer`,
                 [vorname || '', nachname || '', klasse || '', fach || '',
                     pruefer || '', beisitz || '', datum || '', note, themenpool,
                     kommentar || '', geplant_start || '',
@@ -487,7 +512,7 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:#07175e;min-height:100vh
 .liste{max-width:900px;margin:0 auto}
 .card{position:relative;margin:6px 0;border-radius:8px;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.1);cursor:pointer;overflow:hidden;transition:box-shadow .2s}
 .card:hover{box-shadow:0 2px 8px rgba(0,0,0,.15)}
-.card.beisitz{opacity:.45;pointer-events:none;cursor:default}
+.card.beisitz{opacity:.5}
 .card.beisitz .card-inner{background:rgba(240,240,240,.6)}
 .progress{position:absolute;top:0;left:0;height:100%;width:0%;z-index:0;pointer-events:none;transition:width .8s linear}
 .card-inner{position:relative;z-index:1;padding:10px 14px}
@@ -515,6 +540,7 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:#07175e;min-height:100vh
 .btn-skip{background:#9c27b0;color:#fff}
 .btn-exam{background:#2196f3;color:#fff}
 .btn-finish{background:#4caf50;color:#fff}
+.btn-krank{background:#888;color:#fff;font-size:.8em}
 
 .form{margin-top:10px;padding:10px;background:#f9f9f9;border-radius:8px;border:1px solid #e0e0e0}
 .form h4{text-align:center;margin-bottom:8px}
@@ -658,25 +684,29 @@ function render(sid) {
     if (!exp) return;
 
     var info = find(sid);
-    if (info.rolle === 'beisitz') {
-        exp.innerHTML = '<div class="expand-inner"><div style="text-align:center;padding:12px;color:#999;font-size:.9em">Beisitz – nur Einsicht</div></div>';
-        return;
-    }
-
+    var istBeisitz = info.rolle === 'beisitz';
     var h = '<div class="expand-inner">';
 
-    if (t.state === 'idle') {
+    if (t.state === 'krank') {
+        prog.style.width = '100%'; prog.style.backgroundColor = 'rgba(244,67,54,0.25)';
+        badge.className = 'timer-badge on'; badge.style.background = '#f44336'; badge.style.color = '#fff'; badge.textContent = 'Krank';
+        h += '<div class="done"><h4 style="color:#f44336">Krank / Abwesend</h4>';
+        if (!istBeisitz) h += '<div class="btns"><button class="btn btn-resume" data-a="anwesend" data-s="' + sid + '">Wieder anwesend</button></div>';
+        h += '</div>';
+    }
+    else if (t.state === 'idle') {
         prog.style.width = '0%';
         badge.className = 'timer-badge';
         h += '<div class="timer-big">' + fmt(PREP) + '</div>'
-           + '<div class="timer-label">Vorbereitung</div>'
-           + '<div class="btns"><button class="btn btn-start" data-a="start" data-s="' + sid + '">Vorbereitung starten</button></div>';
+           + '<div class="timer-label">Vorbereitung</div>';
+        if (!istBeisitz) h += '<div class="btns"><button class="btn btn-start" data-a="start" data-s="' + sid + '">Vorbereitung starten</button>'
+           + ' <button class="btn btn-krank" data-a="krank" data-s="' + sid + '">Krank</button></div>';
     }
     else if (t.state === 'running') {
         tickUpdate(sid);
         h += '<div class="timer-big">' + fmt(t.rem) + '</div>'
-           + '<div class="timer-label">Vorbereitung läuft...</div>'
-           + '<div class="btns">'
+           + '<div class="timer-label">Vorbereitung läuft...</div>';
+        if (!istBeisitz) h += '<div class="btns">'
            + '<button class="btn btn-pause" data-a="pause" data-s="' + sid + '">Pause</button>'
            + '<button class="btn btn-skip" data-a="skip" data-s="' + sid + '">Überspringen</button>'
            + '<button class="btn btn-reset" data-a="reset" data-s="' + sid + '">Reset</button></div>';
@@ -684,8 +714,8 @@ function render(sid) {
     else if (t.state === 'paused') {
         badge.className = 'timer-badge on'; badge.style.background = '#ff9800'; badge.style.color = '#fff'; badge.textContent = fmt(t.rem) + ' ⏸';
         h += '<div class="timer-big">' + fmt(t.rem) + '</div>'
-           + '<div class="timer-label">Pausiert</div>'
-           + '<div class="btns">'
+           + '<div class="timer-label">Pausiert</div>';
+        if (!istBeisitz) h += '<div class="btns">'
            + '<button class="btn btn-resume" data-a="resume" data-s="' + sid + '">Fortsetzen</button>'
            + '<button class="btn btn-skip" data-a="skip" data-s="' + sid + '">Überspringen</button>'
            + '<button class="btn btn-reset" data-a="reset" data-s="' + sid + '">Reset</button></div>';
@@ -694,29 +724,31 @@ function render(sid) {
         prog.style.width = '100%'; prog.style.backgroundColor = 'rgba(255,152,0,0.3)';
         badge.className = 'timer-badge on'; badge.style.background = '#ff9800'; badge.style.color = '#fff'; badge.textContent = 'Vorb. fertig';
         h += '<div class="timer-big" style="color:#e67e22">00:00</div>'
-           + '<div class="timer-label" style="color:#e67e22;font-weight:700">Vorbereitung fertig</div>'
-           + '<div class="btns"><button class="btn btn-exam" data-a="exam_start" data-s="' + sid + '">Prüfung starten</button></div>';
+           + '<div class="timer-label" style="color:#e67e22;font-weight:700">Vorbereitung fertig</div>';
+        if (!istBeisitz) h += '<div class="btns"><button class="btn btn-exam" data-a="exam_start" data-s="' + sid + '">Prüfung starten</button></div>';
     }
     else if (t.examState === 'running' || t.examState === 'paused') {
         tickUpdate(sid);
         var isPaused = t.examState === 'paused';
         h += '<div class="timer-big">' + (t.examRem < 0 ? '+' : '') + fmt(t.examRem) + '</div>'
-           + '<div class="timer-label">' + (t.examRem < 0 ? '<b style="color:#c0392b">Überzogen!</b>' : (isPaused ? 'Prüfung pausiert' : 'Prüfung läuft...')) + '</div>'
-           + '<div class="btns">';
-        if (isPaused) h += '<button class="btn btn-resume" data-a="exam_resume" data-s="' + sid + '">Fortsetzen</button>';
-        else h += '<button class="btn btn-pause" data-a="exam_pause" data-s="' + sid + '">Pause</button>';
-        h += '</div>';
+           + '<div class="timer-label">' + (t.examRem < 0 ? '<b style="color:#c0392b">Überzogen!</b>' : (isPaused ? 'Prüfung pausiert' : 'Prüfung läuft...')) + '</div>';
+        if (!istBeisitz) {
+            h += '<div class="btns">';
+            if (isPaused) h += '<button class="btn btn-resume" data-a="exam_resume" data-s="' + sid + '">Fortsetzen</button>';
+            else h += '<button class="btn btn-pause" data-a="exam_pause" data-s="' + sid + '">Pause</button>';
+            h += '</div>';
 
-        var noteOpts = '<option value="">--</option>';
-        for (var i = 1; i <= 5; i++) noteOpts += '<option value="' + i + '"' + (t.note == i ? ' selected' : '') + '>' + i + '</option>';
-        var thOpts = '<option value="">--</option>';
-        for (var j = 1; j <= 8; j++) thOpts += '<option value="' + j + '"' + (t.themen == j ? ' selected' : '') + '>' + j + '</option>';
+            var noteOpts = '<option value="">--</option>';
+            for (var i = 1; i <= 5; i++) noteOpts += '<option value="' + i + '"' + (t.note == i ? ' selected' : '') + '>' + i + '</option>';
+            var thOpts = '<option value="">--</option>';
+            for (var j = 1; j <= 8; j++) thOpts += '<option value="' + j + '"' + (t.themen == j ? ' selected' : '') + '>' + j + '</option>';
 
-        h += '<div class="form"><h4>Ergebnis</h4>'
-           + '<div class="form-row"><label>Note*</label> <select id="note-' + sid + '" data-f="note" data-s="' + sid + '">' + noteOpts + '</select>'
-           + ' <label>Themenpool*</label> <select id="th-' + sid + '" data-f="themen" data-s="' + sid + '">' + thOpts + '</select></div>'
-           + '<div class="form-row"><textarea id="komm-' + sid + '" data-f="komm" data-s="' + sid + '" placeholder="Kommentar (optional)">' + (t.komm || '') + '</textarea></div>'
-           + '<div class="btns"><button class="btn btn-finish" data-a="exam_finish" data-s="' + sid + '">Abschließen</button></div></div>';
+            h += '<div class="form"><h4>Ergebnis</h4>'
+               + '<div class="form-row"><label>Note*</label> <select id="note-' + sid + '" data-f="note" data-s="' + sid + '">' + noteOpts + '</select>'
+               + ' <label>Themenpool*</label> <select id="th-' + sid + '" data-f="themen" data-s="' + sid + '">' + thOpts + '</select></div>'
+               + '<div class="form-row"><textarea id="komm-' + sid + '" data-f="komm" data-s="' + sid + '" placeholder="Kommentar (optional)">' + (t.komm || '') + '</textarea></div>'
+               + '<div class="btns"><button class="btn btn-finish" data-a="exam_finish" data-s="' + sid + '">Abschließen</button></div></div>';
+        }
     }
     else if (t.examState === 'done') {
         prog.style.width = '100%'; prog.style.backgroundColor = 'rgba(76,175,80,0.25)';
@@ -748,7 +780,9 @@ function sortCards() {
     var cards = Array.from(liste.querySelectorAll('.card'));
     cards.sort(function(a, b) {
         var sa = g(a.dataset.sid), sb = g(b.dataset.sid);
-        return (sa.examState === 'done' ? 1 : 0) - (sb.examState === 'done' ? 1 : 0);
+        var wa = (sa.examState === 'done' || sa.state === 'krank') ? 1 : 0;
+        var wb = (sb.examState === 'done' || sb.state === 'krank') ? 1 : 0;
+        return wa - wb;
     });
     cards.forEach(function(c) { liste.appendChild(c); });
 }
@@ -825,6 +859,20 @@ document.addEventListener('click', function(e) {
                 datum: info.datum, geplant_start: info.exam_start || ''
             });
             sortCards();
+        }
+        else if (a === 'krank') {
+            var card3 = document.getElementById('card-' + sid);
+            var name3 = card3 ? card3.querySelector('.name').textContent.trim() : 'Schüler';
+            if (!confirm('"' + name3 + '" als krank eintragen?')) return;
+            if (t.iid) { clearInterval(t.iid); t.iid = null; }
+            if (t.eiid) { clearInterval(t.eiid); t.eiid = null; }
+            t.state = 'krank'; t.rem = 0;
+            render(sid); api(sid, 'krank'); sortCards();
+        }
+        else if (a === 'anwesend') {
+            if (t.iid) { clearInterval(t.iid); t.iid = null; }
+            t.state = 'idle'; t.rem = PREP;
+            render(sid); api(sid, 'anwesend'); sortCards();
         }
         return;
     }
