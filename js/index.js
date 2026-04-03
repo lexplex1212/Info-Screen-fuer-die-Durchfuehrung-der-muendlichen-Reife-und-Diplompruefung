@@ -594,8 +594,10 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:#07175e;min-height:100vh
 .liste{max-width:900px;margin:0 auto}
 .card{position:relative;margin:6px 0;border-radius:8px;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.1);cursor:pointer;overflow:hidden;transition:box-shadow .2s}
 .card:hover{box-shadow:0 2px 8px rgba(0,0,0,.15)}
-.card.beisitz{opacity:.5}
+.card.beisitz{opacity:.5;cursor:default}
 .card.beisitz .card-inner{background:rgba(240,240,240,.6)}
+.card.beisitz.done-green{opacity:.5}
+.card.beisitz.done-green .card-inner{background:rgba(200,240,200,.6)}
 .progress{position:absolute;top:0;left:0;height:100%;width:0%;z-index:0;pointer-events:none;transition:width .8s linear}
 .card-inner{position:relative;z-index:1;padding:10px 14px}
 .card-top{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
@@ -774,6 +776,39 @@ function render(sid) {
     var rolle = info.rolle || 'beisitz';
     var canControl = rolle !== 'beisitz';
     var istAV = rolle === 'av';
+    var card = document.getElementById('card-' + sid);
+
+    if (rolle === 'beisitz') {
+        exp.innerHTML = '';
+        if (card) card.classList.remove('open', 'done-green');
+        if (t.state === 'krank') {
+            prog.style.width = '100%'; prog.style.backgroundColor = 'rgba(244,67,54,0.25)';
+            badge.className = 'timer-badge on'; badge.style.background = '#f44336'; badge.style.color = '#fff'; badge.textContent = 'Krank';
+        } else if (t.state === 'idle') {
+            prog.style.width = '0%'; badge.className = 'timer-badge';
+        } else if (t.state === 'running') {
+            var p = Math.max(0, Math.min(1, 1 - t.rem / t.prepDauer));
+            prog.style.width = (p * 100) + '%'; prog.style.backgroundColor = 'rgba(231,76,60,' + (0.15 + p * 0.25) + ')';
+            badge.className = 'timer-badge on'; badge.style.background = '#ffe0cc'; badge.style.color = '#c0392b'; badge.textContent = fmt(t.rem);
+        } else if (t.state === 'paused') {
+            badge.className = 'timer-badge on'; badge.style.background = '#ff9800'; badge.style.color = '#fff'; badge.textContent = fmt(t.rem) + ' ⏸';
+        } else if (t.state === 'prep_done' && t.examState === 'idle') {
+            prog.style.width = '100%'; prog.style.backgroundColor = 'rgba(255,152,0,0.3)';
+            badge.className = 'timer-badge on'; badge.style.background = '#ff9800'; badge.style.color = '#fff'; badge.textContent = 'Vorb. fertig';
+        } else if (t.examState === 'running' || t.examState === 'paused') {
+            var ep = t.examRem >= 0 ? Math.max(0, Math.min(1, 1 - t.examRem / t.examDauer)) : 1;
+            prog.style.width = (ep * 100) + '%';
+            prog.style.backgroundColor = t.examRem < 0 ? 'rgba(231,76,60,0.3)' : 'rgba(76,175,80,' + (0.1 + ep * 0.3) + ')';
+            badge.className = 'timer-badge on'; badge.style.background = '#fff3cd'; badge.style.color = '#856404';
+            badge.textContent = (t.examRem < 0 ? 'ÜBER ' : '') + fmt(t.examRem);
+        } else if (t.examState === 'done') {
+            prog.style.width = '100%'; prog.style.backgroundColor = 'rgba(76,175,80,0.25)';
+            badge.className = 'timer-badge on'; badge.style.background = '#4caf50'; badge.style.color = '#fff'; badge.textContent = 'Fertig';
+            if (card) card.classList.add('done-green');
+        }
+        return;
+    }
+
     var h = '<div class="expand-inner">';
 
     if (t.state === 'krank') {
@@ -997,7 +1032,7 @@ document.addEventListener('click', function(e) {
     if (e.target.closest('.form')) return;
 
     var card = e.target.closest('.card');
-    if (card) card.classList.toggle('open');
+    if (card && !card.classList.contains('beisitz')) card.classList.toggle('open');
 });
 
 document.addEventListener('change', function(e) {
@@ -1054,6 +1089,9 @@ setInterval(function() {
         for (var sid in data) {
             var sInfo = find(sid);
             if (sInfo.rolle === 'pruefer') continue;
+
+            var cardEl = document.getElementById('card-' + sid);
+            if (cardEl && cardEl.classList.contains('open')) continue;
 
             var info = data[sid], t = g(sid);
             t.rem = Math.max(0, info.remaining_seconds);
