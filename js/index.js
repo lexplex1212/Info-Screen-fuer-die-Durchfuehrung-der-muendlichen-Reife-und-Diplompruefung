@@ -161,6 +161,17 @@ function getAlleSchueler(kuerzel) {
     });
 }
 
+function getAlleSchuelerAV() {
+    return new Promise(resolve => {
+        const alleKlassen = Object.values(klassen).flat();
+        const ph = alleKlassen.map(() => '?').join(',');
+        db.all(`SELECT rowid, * FROM termine WHERE klasse IN (${ph})
+                ORDER BY datum, exam_start`, alleKlassen, (err, rows) => {
+            resolve(err ? [] : rows);
+        });
+    });
+}
+
 function getSchuelerInfoFromSid(sid) {
     return new Promise(resolve => {
         const rowid = parseInt(sid.split('_').pop());
@@ -176,6 +187,15 @@ function prueferExistiert(kuerzel) {
         db.get('SELECT id FROM pruefer_login WHERE UPPER(kuerzel) = ?',
             [kuerzel.toUpperCase()], (err, row) => {
                 resolve(!err && !!row);
+            });
+    });
+}
+
+function avExistiert(kuerzel) {
+    return new Promise(resolve => {
+        db.get('SELECT id, rolle FROM vorsitz_av WHERE UPPER(kuerzel) = ?',
+            [kuerzel.toUpperCase()], (err, row) => {
+                resolve(!err && row ? row : null);
             });
     });
 }
@@ -374,6 +394,31 @@ app.post('/api/timer/:id/exam_finish', requireAuth, (req, res) => {
 });
 
 
+// --- API: AV Note bearbeiten ---
+
+app.post('/api/timer/:id/edit_note', requireAuth, (req, res) => {
+    if (!req.session.user || req.session.user.rolle !== 'av') {
+        return res.status(403).json({ error: 'Nur AV darf Noten bearbeiten' });
+    }
+    const { note, themenpool, kommentar } = req.body;
+    if (!note || !themenpool) return res.status(400).json({ error: 'Note und Themenpool sind Pflicht' });
+
+    db.run(`UPDATE timer_status SET note=?, themenpool=?, kommentar=? WHERE schueler_id=?`,
+        [note, themenpool, kommentar || '', req.params.id], err => {
+            if (err) return res.status(500).json({ error: err.message });
+            getSchuelerInfoFromSid(req.params.id).then(info => {
+                if (info) {
+                    db.run(`UPDATE Pruefer_Auswertung SET note=?, themenpool=?, kommentar=?
+                            WHERE vorname=? AND nachname=? AND klasse=?`,
+                        [note, themenpool, kommentar || '',
+                            info.vorname || '', info.nachname || '', info.klasse || '']);
+                }
+                res.json({ ok: true });
+            });
+        });
+});
+
+
 // --- API: Alle Timer laden (für Frontend-Init) ---
 
 app.get('/api/timers/all', requireAuth, (req, res) => {
@@ -443,12 +488,17 @@ app.get('/auth/callback', async (req, res) => {
         }
 
         const kuerzel = email.split('@')[0];
+        const avInfo = await avExistiert(kuerzel);
+        if (avInfo) {
+            req.session.user = { email, kuerzel, rolle: 'av' };
+            return res.redirect('/home');
+        }
         const istPruefer = await prueferExistiert(kuerzel);
         if (!istPruefer) {
             return res.status(403).send('Zugriff verweigert. Sie sind nicht als Prüfer eingetragen. <a href="/">Zurück</a>');
         }
 
-        req.session.user = { email, kuerzel };
+        req.session.user = { email, kuerzel, rolle: 'pruefer' };
         res.redirect('/home');
     } catch (err) {
         console.error(err.response?.data || err.message);
@@ -466,23 +516,31 @@ app.get('/logout', (req, res) => {
 app.get('/home', requireAuth, async (req, res) => {
     try {
         const kuerzel = req.session.user.kuerzel;
-        const schueler = await getAlleSchueler(kuerzel);
+        const userRolle = req.session.user.rolle || 'pruefer';
+        const schueler = userRolle === 'av' ? await getAlleSchuelerAV() : await getAlleSchueler(kuerzel);
 
         const cardsHtml = schueler.map((s, i) => {
             const zweig = zweigZuordnung[s.klasse] || 'elektronik';
             const sid = zweig + '_' + (s.rowid || i);
             const farbe = zweigFarben[zweig] || '#666';
             const textFarbe = (zweig === 'elektrotechnik' || zweig === 'wirtschaft') ? '#333' : '#fff';
-            const istPruefer = (s.pruefer || '').toUpperCase() === kuerzel.toUpperCase();
-            const beisitzClass = istPruefer ? '' : ' beisitz';
 
-            return `<div class="card${beisitzClass}" id="card-${sid}" data-sid="${sid}" data-rolle="${istPruefer ? 'pruefer' : 'beisitz'}" style="border-left:4px solid ${farbe}">
+            let rolle;
+            if (userRolle === 'av') rolle = 'av';
+            else if ((s.pruefer || '').toUpperCase() === kuerzel.toUpperCase()) rolle = 'pruefer';
+            else rolle = 'beisitz';
+
+            const beisitzClass = rolle === 'beisitz' ? ' beisitz' : '';
+            const rolleBadge = rolle === 'beisitz' ? '<span class="badge" style="background:#999;color:#fff">Beisitz</span>'
+                : rolle === 'av' ? '<span class="badge" style="background:#d4a017;color:#fff">AV</span>' : '';
+
+            return `<div class="card${beisitzClass}" id="card-${sid}" data-sid="${sid}" data-rolle="${rolle}" style="border-left:4px solid ${farbe}">
                 <div class="progress" id="progress-${sid}"></div>
                 <div class="card-inner">
                     <div class="card-top">
                         <span class="name">${s.vorname || ''} ${s.nachname || ''}</span>
                         ${s.klasse ? `<span class="badge" style="background:${farbe};color:${textFarbe}">${s.klasse}</span>` : ''}
-                        ${!istPruefer ? '<span class="badge" style="background:#999;color:#fff">Beisitz</span>' : ''}
+                        ${rolleBadge}
                         <span class="timer-badge" id="badge-${sid}"></span>
                         <span class="meta">
                             ${s.fach ? `<b>Fach:</b> ${s.fach}` : ''}
@@ -499,7 +557,10 @@ app.get('/home', requireAuth, async (req, res) => {
 
         const schuelerJson = JSON.stringify(schueler.map((s, i) => {
             const zw = zweigZuordnung[s.klasse] || 'elektronik';
-            const istP = (s.pruefer || '').toUpperCase() === kuerzel.toUpperCase();
+            let rolle;
+            if (userRolle === 'av') rolle = 'av';
+            else if ((s.pruefer || '').toUpperCase() === kuerzel.toUpperCase()) rolle = 'pruefer';
+            else rolle = 'beisitz';
             const pd = zeitDifferenz(s.prep_start, s.prep_end, VORBEREITUNGS_TIMER);
             const ed = zeitDifferenz(s.exam_start, s.exam_end, PRUEFUNGS_TIMER);
             return {
@@ -511,7 +572,7 @@ app.get('/home', requireAuth, async (req, res) => {
                 prep_start: s.prep_start || s.rep_start || '',
                 exam_start: s.exam_start || '', exam_end: s.exam_end || '',
                 zweig: zw,
-                rolle: istP ? 'pruefer' : 'beisitz',
+                rolle: rolle,
                 prepDauer: pd,
                 examDauer: ed
             };
@@ -562,6 +623,7 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:#07175e;min-height:100vh
 .btn-exam{background:#2196f3;color:#fff}
 .btn-finish{background:#4caf50;color:#fff}
 .btn-krank{background:#888;color:#fff;font-size:.8em}
+.btn-edit{background:#ff9800;color:#fff}
 
 .form{margin-top:10px;padding:10px;background:#f9f9f9;border-radius:8px;border:1px solid #e0e0e0}
 .form h4{text-align:center;margin-bottom:8px}
@@ -593,7 +655,7 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:#07175e;min-height:100vh
 <div class="top">
     <h1>Matura Prüfungen</h1>
     <div style="display:flex;gap:10px;align-items:center">
-        <span style="font-size:.85em">${kuerzel.toUpperCase()}</span>
+        <span style="font-size:.85em">${kuerzel.toUpperCase()}${userRolle === 'av' ? ' (AV)' : ''}</span>
         <a href="/logout">Logout</a>
     </div>
 </div>
@@ -709,14 +771,16 @@ function render(sid) {
     if (!exp) return;
 
     var info = find(sid);
-    var istBeisitz = info.rolle === 'beisitz';
+    var rolle = info.rolle || 'beisitz';
+    var canControl = rolle !== 'beisitz';
+    var istAV = rolle === 'av';
     var h = '<div class="expand-inner">';
 
     if (t.state === 'krank') {
         prog.style.width = '100%'; prog.style.backgroundColor = 'rgba(244,67,54,0.25)';
         badge.className = 'timer-badge on'; badge.style.background = '#f44336'; badge.style.color = '#fff'; badge.textContent = 'Krank';
         h += '<div class="done"><h4 style="color:#f44336">Krank / Abwesend</h4>';
-        if (!istBeisitz) h += '<div class="btns"><button class="btn btn-resume" data-a="anwesend" data-s="' + sid + '">Wieder anwesend</button></div>';
+        if (canControl) h += '<div class="btns"><button class="btn btn-resume" data-a="anwesend" data-s="' + sid + '">Wieder anwesend</button></div>';
         h += '</div>';
     }
     else if (t.state === 'idle') {
@@ -724,14 +788,14 @@ function render(sid) {
         badge.className = 'timer-badge';
         h += '<div class="timer-big">' + fmt(t.prepDauer) + '</div>'
            + '<div class="timer-label">Vorbereitung</div>';
-        if (!istBeisitz) h += '<div class="btns"><button class="btn btn-start" data-a="start" data-s="' + sid + '">Vorbereitung starten</button>'
+        if (canControl) h += '<div class="btns"><button class="btn btn-start" data-a="start" data-s="' + sid + '">Vorbereitung starten</button>'
            + ' <button class="btn btn-krank" data-a="krank" data-s="' + sid + '">Krank</button></div>';
     }
     else if (t.state === 'running') {
         tickUpdate(sid);
         h += '<div class="timer-big">' + fmt(t.rem) + '</div>'
            + '<div class="timer-label">Vorbereitung läuft...</div>';
-        if (!istBeisitz) h += '<div class="btns">'
+        if (canControl) h += '<div class="btns">'
            + '<button class="btn btn-pause" data-a="pause" data-s="' + sid + '">Pause</button>'
            + '<button class="btn btn-skip" data-a="skip" data-s="' + sid + '">Überspringen</button>'
            + '<button class="btn btn-reset" data-a="reset" data-s="' + sid + '">Reset</button></div>';
@@ -740,7 +804,7 @@ function render(sid) {
         badge.className = 'timer-badge on'; badge.style.background = '#ff9800'; badge.style.color = '#fff'; badge.textContent = fmt(t.rem) + ' ⏸';
         h += '<div class="timer-big">' + fmt(t.rem) + '</div>'
            + '<div class="timer-label">Pausiert</div>';
-        if (!istBeisitz) h += '<div class="btns">'
+        if (canControl) h += '<div class="btns">'
            + '<button class="btn btn-resume" data-a="resume" data-s="' + sid + '">Fortsetzen</button>'
            + '<button class="btn btn-skip" data-a="skip" data-s="' + sid + '">Überspringen</button>'
            + '<button class="btn btn-reset" data-a="reset" data-s="' + sid + '">Reset</button></div>';
@@ -750,14 +814,14 @@ function render(sid) {
         badge.className = 'timer-badge on'; badge.style.background = '#ff9800'; badge.style.color = '#fff'; badge.textContent = 'Vorb. fertig';
         h += '<div class="timer-big" style="color:#e67e22">00:00</div>'
            + '<div class="timer-label" style="color:#e67e22;font-weight:700">Vorbereitung fertig</div>';
-        if (!istBeisitz) h += '<div class="btns"><button class="btn btn-exam" data-a="exam_start" data-s="' + sid + '">Prüfung starten</button></div>';
+        if (canControl) h += '<div class="btns"><button class="btn btn-exam" data-a="exam_start" data-s="' + sid + '">Prüfung starten</button></div>';
     }
     else if (t.examState === 'running' || t.examState === 'paused') {
         tickUpdate(sid);
         var isPaused = t.examState === 'paused';
         h += '<div class="timer-big">' + (t.examRem < 0 ? '+' : '') + fmt(t.examRem) + '</div>'
            + '<div class="timer-label">' + (t.examRem < 0 ? '<b style="color:#c0392b">Überzogen!</b>' : (isPaused ? 'Prüfung pausiert' : 'Prüfung läuft...')) + '</div>';
-        if (!istBeisitz) {
+        if (canControl) {
             h += '<div class="btns">';
             if (isPaused) h += '<button class="btn btn-resume" data-a="exam_resume" data-s="' + sid + '">Fortsetzen</button>';
             else h += '<button class="btn btn-pause" data-a="exam_pause" data-s="' + sid + '">Pause</button>';
@@ -778,15 +842,28 @@ function render(sid) {
     else if (t.examState === 'done') {
         prog.style.width = '100%'; prog.style.backgroundColor = 'rgba(76,175,80,0.25)';
         badge.className = 'timer-badge on'; badge.style.background = '#4caf50'; badge.style.color = '#fff'; badge.textContent = 'Fertig';
-        var info = find(sid);
+        var dInfo = find(sid);
         h += '<div class="done"><h4>Abgeschlossen</h4><div class="done-grid">'
            + '<div><b>Note:</b> ' + t.note + '</div>'
            + '<div><b>Themenpool:</b> ' + t.themen + '</div>'
-           + (info.exam_start ? '<div><b>Geplant:</b> ' + info.exam_start + '</div>' : '')
+           + (dInfo.exam_start ? '<div><b>Geplant:</b> ' + dInfo.exam_start + '</div>' : '')
            + (t.startedAt ? '<div><b>Tatsächlich:</b> ' + t.startedAt + '</div>' : '')
            + (t.dauer ? '<div><b>Dauer:</b> ' + t.dauer + '</div>' : '')
            + (t.komm ? '<div style="grid-column:1/-1"><b>Kommentar:</b> ' + t.komm + '</div>' : '')
-           + '</div></div>';
+           + '</div>';
+        if (istAV) {
+            var enOpts = '<option value="">--</option>';
+            for (var ei = 1; ei <= 5; ei++) enOpts += '<option value="' + ei + '"' + (t.note == ei ? ' selected' : '') + '>' + ei + '</option>';
+            var etOpts = '<option value="">--</option>';
+            for (var ej = 1; ej <= 8; ej++) etOpts += '<option value="' + ej + '"' + (t.themen == ej ? ' selected' : '') + '>' + ej + '</option>';
+            h += '<div class="form" id="editform-' + sid + '" style="display:none"><h4>Bearbeiten (AV)</h4>'
+               + '<div class="form-row"><label>Note*</label> <select id="enote-' + sid + '">' + enOpts + '</select>'
+               + ' <label>Themenpool*</label> <select id="eth-' + sid + '">' + etOpts + '</select></div>'
+               + '<div class="form-row"><textarea id="ekomm-' + sid + '" placeholder="Kommentar">' + (t.komm || '') + '</textarea></div>'
+               + '<div class="btns"><button class="btn btn-finish" data-a="av_save" data-s="' + sid + '">Speichern</button></div></div>'
+               + '<div class="btns"><button class="btn btn-edit" data-a="av_edit" data-s="' + sid + '">Bearbeiten</button></div>';
+        }
+        h += '</div>';
     }
 
     h += '</div>';
@@ -899,6 +976,21 @@ document.addEventListener('click', function(e) {
             t.state = 'idle'; t.rem = t.prepDauer;
             render(sid); api(sid, 'anwesend', { prepDauer: t.prepDauer }); sortCards();
         }
+        else if (a === 'av_edit') {
+            var ef = document.getElementById('editform-' + sid);
+            if (ef) ef.style.display = ef.style.display === 'none' ? 'block' : 'none';
+            return;
+        }
+        else if (a === 'av_save') {
+            var en = document.getElementById('enote-' + sid);
+            var et = document.getElementById('eth-' + sid);
+            var ek = document.getElementById('ekomm-' + sid);
+            if (!en || !en.value || !et || !et.value) { alert('Note und Themenpool auswählen!'); return; }
+            t.note = parseInt(en.value); t.themen = parseInt(et.value);
+            t.komm = ek ? ek.value : '';
+            api(sid, 'edit_note', { note: t.note, themenpool: t.themen, kommentar: t.komm });
+            render(sid);
+        }
         return;
     }
 
@@ -940,29 +1032,33 @@ fetch('/api/timers/all').then(function(r) { return r.json(); }).then(function(da
         if (t.state === 'prep_done') t.rem = 0;
 
         if (t.state === 'running' && t.rem > 0) {
-            (function(id) { g(id).iid = setInterval(function() { prepTick(id); }, 1000); })(sid);
+            var sInfo = find(sid);
+            if (sInfo.rolle !== 'beisitz') {
+                (function(id) { g(id).iid = setInterval(function() { prepTick(id); }, 1000); })(sid);
+            }
         }
         if (t.examState === 'running') {
-            (function(id) { g(id).eiid = setInterval(function() { examTick(id); }, 1000); })(sid);
+            var sInfo2 = find(sid);
+            if (sInfo2.rolle !== 'beisitz') {
+                (function(id) { g(id).eiid = setInterval(function() { examTick(id); }, 1000); })(sid);
+            }
         }
         render(sid);
     }
     sortCards();
 }).catch(function(e) { console.warn('Load:', e); });
 
-// Polling: Beisitz-Karten alle 5s synchronisieren
+// Polling: Beisitz/AV-Karten alle 5s synchronisieren
 setInterval(function() {
     fetch('/api/timers/all').then(function(r) { return r.json(); }).then(function(data) {
         for (var sid in data) {
-            var info = data[sid], t = g(sid);
             var sInfo = find(sid);
-            if (sInfo.rolle !== 'beisitz') continue;
+            if (sInfo.rolle === 'pruefer') continue;
 
-            var changed = false;
-            if (t.state !== (info.state || 'idle')) { t.state = info.state || 'idle'; changed = true; }
-            if (t.examState !== (info.exam_state || 'idle')) { t.examState = info.exam_state || 'idle'; changed = true; }
-
+            var info = data[sid], t = g(sid);
             t.rem = Math.max(0, info.remaining_seconds);
+            t.state = info.state || 'idle';
+            t.examState = info.exam_state || 'idle';
             t.examRem = info.exam_remaining !== undefined ? info.exam_remaining : t.examDauer;
             t.note = info.note || null;
             t.themen = info.themenpool || null;
