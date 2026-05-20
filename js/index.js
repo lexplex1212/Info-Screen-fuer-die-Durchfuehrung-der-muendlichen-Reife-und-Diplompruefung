@@ -917,7 +917,7 @@ function render(sid) {
         var feldNeu = document.getElementById(fokus.id);
         if (feldNeu) {
             if (feldNeu.value !== fokus.val) feldNeu.value = fokus.val;
-            feldNeu.focus();
+            feldNeu.focus({ preventScroll: true });
             try { feldNeu.setSelectionRange(fokus.start, fokus.end); } catch (e) {}
         }
     }
@@ -933,13 +933,16 @@ function sortCards() {
     var liste = document.querySelector('.liste');
     if (!liste) return;
     var cards = Array.from(liste.querySelectorAll('.card'));
-    cards.sort(function(a, b) {
+    var sortiert = cards.slice().sort(function(a, b) {
         var sa = g(a.dataset.sid), sb = g(b.dataset.sid);
         var wa = (sa.examState === 'done' || sa.state === 'krank') ? 1 : 0;
         var wb = (sb.examState === 'done' || sb.state === 'krank') ? 1 : 0;
         return wa - wb;
     });
-    cards.forEach(function(c) { liste.appendChild(c); });
+    // Nur neu anordnen, wenn sich die Reihenfolge wirklich geändert hat, sonst springt Fokus und Scrollposition
+    var gleich = cards.every(function(c, i) { return c === sortiert[i]; });
+    if (gleich) return;
+    sortiert.forEach(function(c) { liste.appendChild(c); });
 }
 
 document.addEventListener('click', function(e) {
@@ -1130,7 +1133,11 @@ setInterval(function() {
 
             render(sid);
         }
-        sortCards();
+        // Nicht umsortieren, solange in einem Feld getippt wird, sonst verliert die Textarea den Fokus
+        var aktivJetzt = document.activeElement;
+        var tippt = aktivJetzt && (aktivJetzt.tagName === 'TEXTAREA' || aktivJetzt.tagName === 'INPUT')
+            && aktivJetzt.closest && aktivJetzt.closest('.liste');
+        if (!tippt) sortCards();
     }).catch(function() {});
 }, 5000);
 
