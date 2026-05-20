@@ -136,8 +136,8 @@ app.use(session({
 }));
 
 function requireAuth(req, res, next) {
-    if (req.session && req.session.user) return next();
-    res.redirect('/');
+    if (req.session && req.session.user) return next();     // eingeloggt -> weiter
+    res.redirect('/');  // nicht eingeloggt -> Login-Seite
 }
 
 
@@ -772,6 +772,14 @@ function render(sid) {
     var exp = document.getElementById('exp-' + sid);
     if (!exp) return;
 
+    // Fokussiertes Eingabefeld dieser Karte merken, damit der Cursor beim Neuaufbau nicht zurückspringt
+    var aktivesFeld = document.activeElement;
+    var fokus = null;
+    if (aktivesFeld && exp.contains(aktivesFeld) &&
+        (aktivesFeld.tagName === 'TEXTAREA' || aktivesFeld.tagName === 'INPUT')) {
+        fokus = { id: aktivesFeld.id, start: aktivesFeld.selectionStart, end: aktivesFeld.selectionEnd, val: aktivesFeld.value };
+    }
+
     var info = find(sid);
     var rolle = info.rolle || 'beisitz';
     var canControl = rolle !== 'beisitz';
@@ -903,6 +911,16 @@ function render(sid) {
 
     h += '</div>';
     exp.innerHTML = h;
+
+    // Fokus und Cursorposition wiederherstellen, falls vorher in dieses Feld getippt wurde
+    if (fokus && fokus.id) {
+        var feldNeu = document.getElementById(fokus.id);
+        if (feldNeu) {
+            if (feldNeu.value !== fokus.val) feldNeu.value = fokus.val;
+            feldNeu.focus();
+            try { feldNeu.setSelectionRange(fokus.start, fokus.end); } catch (e) {}
+        }
+    }
 }
 
 function api(sid, action, body) {
@@ -1092,6 +1110,11 @@ setInterval(function() {
 
             var cardEl = document.getElementById('card-' + sid);
             if (cardEl && cardEl.classList.contains('open')) continue;
+
+            // Karte mit aktiver Texteingabe nicht synchronisieren, sonst springt der Cursor
+            var fokusEl = document.activeElement;
+            if (cardEl && fokusEl && cardEl.contains(fokusEl) &&
+                (fokusEl.tagName === 'TEXTAREA' || fokusEl.tagName === 'INPUT')) continue;
 
             var info = data[sid], t = g(sid);
             t.rem = Math.max(0, info.remaining_seconds);
