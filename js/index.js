@@ -1231,7 +1231,7 @@ function toggleWidget() {
 });
 
 
-// HTTPS-Server starten
+// Server starten
 const port = process.env.PORT || 3000;
 const httpsOpts = {
     key: fs.readFileSync('./cert/key.pem'),
