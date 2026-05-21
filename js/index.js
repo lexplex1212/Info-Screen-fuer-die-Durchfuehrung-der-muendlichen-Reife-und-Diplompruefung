@@ -172,6 +172,17 @@ function getAlleSchuelerAV() {
     });
 }
 
+// Gespeicherten Timer-/Pruefzustand als Map liefern, damit die Seite ihn schon beim Laden kennt
+function getTimerMap() {
+    return new Promise(resolve => {
+        db.all('SELECT * FROM timer_status', [], (err, rows) => {
+            const map = {};
+            (rows || []).forEach(row => { map[row.schueler_id] = berechneTimerStatus(row); });
+            resolve(map);
+        });
+    });
+}
+
 function getSchuelerInfoFromSid(sid) {
     return new Promise(resolve => {
         const rowid = parseInt(sid.split('_').pop());
@@ -518,6 +529,7 @@ app.get('/home', requireAuth, async (req, res) => {
         const kuerzel = req.session.user.kuerzel;
         const userRolle = req.session.user.rolle || 'pruefer';
         const schueler = userRolle === 'av' ? await getAlleSchuelerAV() : await getAlleSchueler(kuerzel);
+        const timerMap = await getTimerMap();
 
         const cardsHtml = schueler.map((s, i) => {
             const zweig = zweigZuordnung[s.klasse] || 'elektronik';
@@ -563,8 +575,10 @@ app.get('/home', requireAuth, async (req, res) => {
             else rolle = 'beisitz';
             const pd = zeitDifferenz(s.prep_start, s.prep_end, VORBEREITUNGS_TIMER);
             const ed = zeitDifferenz(s.exam_start, s.exam_end, PRUEFUNGS_TIMER);
+            const sid = zw + '_' + (s.rowid || i);
+            const ts = timerMap[sid] || {};
             return {
-                sid: zw + '_' + (s.rowid || i),
+                sid: sid,
                 vorname: s.vorname || '', nachname: s.nachname || '',
                 klasse: s.klasse || '', fach: s.fach || '',
                 pruefer: s.pruefer || '', beisitz: s.beisitz || '',
@@ -574,7 +588,17 @@ app.get('/home', requireAuth, async (req, res) => {
                 zweig: zw,
                 rolle: rolle,
                 prepDauer: pd,
-                examDauer: ed
+                examDauer: ed,
+                // Gespeicherter Zustand aus der Datenbank, damit ein Reload nichts zuruecksetzt
+                state: ts.state || 'idle',
+                remaining: (ts.remaining_seconds !== undefined && ts.remaining_seconds !== null) ? ts.remaining_seconds : pd,
+                examState: ts.exam_state || 'idle',
+                examRemaining: (ts.exam_remaining !== undefined && ts.exam_remaining !== null) ? ts.exam_remaining : ed,
+                note: (ts.note !== undefined && ts.note !== null) ? ts.note : null,
+                themenpool: (ts.themenpool !== undefined && ts.themenpool !== null) ? ts.themenpool : null,
+                kommentar: ts.kommentar || '',
+                startedAt: ts.tatsaechlich_gestartet || null,
+                dauer: ts.pruefungsdauer || null
             };
         }));
 
@@ -689,10 +713,17 @@ function g(sid) {
         var pd = info.prepDauer || 300;
         var ed = info.examDauer || 300;
         T[sid] = {
-            state:'idle', rem:pd, iid:null,
-            examState:'idle', examRem:ed, eiid:null,
-            note:null, themen:null, komm:'',
-            startedAt:null, dauer:null,
+            state: info.state || 'idle',
+            rem: (info.remaining !== undefined && info.remaining !== null) ? info.remaining : pd,
+            iid:null,
+            examState: info.examState || 'idle',
+            examRem: (info.examRemaining !== undefined && info.examRemaining !== null) ? info.examRemaining : ed,
+            eiid:null,
+            note: (info.note !== undefined ? info.note : null),
+            themen: (info.themenpool !== undefined ? info.themenpool : null),
+            komm: info.kommentar || '',
+            startedAt: info.startedAt || null,
+            dauer: info.dauer || null,
             prepDauer:pd, examDauer:ed
         };
     }
@@ -1067,10 +1098,18 @@ document.addEventListener('input', function(e) {
     if (e.target.matches('textarea[data-f]')) g(e.target.dataset.s).komm = e.target.value;
 });
 
-// Init: Timer vom Server laden
+// Init: gespeicherten Zustand anzeigen und laufende Timer weiterlaufen lassen
 document.querySelectorAll('.card').forEach(function(c) {
     var sid = c.dataset.sid;
-    if (sid) render(sid);
+    if (!sid) return;
+    var t = g(sid), info = find(sid);
+    if (t.state === 'running' && t.rem > 0 && info.rolle !== 'beisitz' && !t.iid) {
+        (function(id) { g(id).iid = setInterval(function() { prepTick(id); }, 1000); })(sid);
+    }
+    if (t.examState === 'running' && info.rolle !== 'beisitz' && !t.eiid) {
+        (function(id) { g(id).eiid = setInterval(function() { examTick(id); }, 1000); })(sid);
+    }
+    render(sid);
 });
 
 fetch('/api/timers/all').then(function(r) { return r.json(); }).then(function(data) {
@@ -1089,13 +1128,13 @@ fetch('/api/timers/all').then(function(r) { return r.json(); }).then(function(da
 
         if (t.state === 'running' && t.rem > 0) {
             var sInfo = find(sid);
-            if (sInfo.rolle !== 'beisitz') {
+            if (sInfo.rolle !== 'beisitz' && !t.iid) {
                 (function(id) { g(id).iid = setInterval(function() { prepTick(id); }, 1000); })(sid);
             }
         }
         if (t.examState === 'running') {
             var sInfo2 = find(sid);
-            if (sInfo2.rolle !== 'beisitz') {
+            if (sInfo2.rolle !== 'beisitz' && !t.eiid) {
                 (function(id) { g(id).eiid = setInterval(function() { examTick(id); }, 1000); })(sid);
             }
         }
@@ -1231,7 +1270,7 @@ function toggleWidget() {
 });
 
 
-// HTTPS-Server
+// HTTPS-Server starten
 const port = process.env.PORT || 3000;
 const httpsOpts = {
     key: fs.readFileSync('./cert/key.pem'),
